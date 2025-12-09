@@ -9,6 +9,7 @@ import MasterRecords from './pages/MasterRecords';
 import ProtectedRoute from './components/ProtectedRoute';
 import Profile from './pages/Profile';
 import DCR from './pages/DCR';
+import LMS from './pages/LMS';
 
 function AppRoutes() {
   const { userRole, loading } = useAuth();
@@ -53,6 +54,12 @@ function AppRoutes() {
       <Route path="/master" element={
         <ProtectedRoute allowedRoles={['admin', 'user']}>
           <MasterRecords />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/lms" element={
+        <ProtectedRoute allowedRoles={['admin', 'user']}>
+          <LMS />
         </ProtectedRoute>
       } />
 

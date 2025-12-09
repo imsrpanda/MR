@@ -26,6 +26,7 @@ export default function DashboardLayout({ children, title, backgroundClass = "bg
         { label: 'Dashboard', path: '/dashboard', roles: ['user'] },
         { label: 'Master', path: '/master', roles: ['admin', 'user'] },
         { label: 'DCR', path: '/dcr', roles: ['admin', 'user'] },
+        { label: 'LMS', path: '/lms', roles: ['admin', 'user'] },
     ];
 
     const NavContent = () => (

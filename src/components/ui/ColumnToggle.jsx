@@ -34,7 +34,7 @@ export default function ColumnToggle({ columns, visibleColumns, onChange }) {
             </Button>
 
             {isOpen && (
-                <div className="origin-top-right absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none z-10">
+                <div className="origin-top-left absolute left-0 mt-2 w-56 max-h-[60vh] overflow-y-auto rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none z-50">
                     <div className="py-1" role="menu" aria-orientation="vertical">
                         {columns.map((col) => (
                             <label key={col.id} className="flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 cursor-pointer">
