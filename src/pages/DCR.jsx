@@ -12,10 +12,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { PRODUCTS } from '../constants/products';
 
+const SPECIALISTS = ['D&G', 'SVR', 'URO', 'PED', 'PHY', 'GP', 'CP', 'MBBSORTH', 'CHESTSKIN', 'NEU', 'OTHER'];
+
 const DCR_COLS_DEF = [
     { id: 'status', label: 'Status' },
     { id: 'type', label: 'Type' },
     { id: 'name', label: 'Name' },
+    { id: 'specialist', label: 'Specialist' },
     { id: 'location', label: 'Location' },
     { id: 'visited', label: 'Visited' },
     { id: 'actions', label: 'Actions' }
@@ -44,6 +47,7 @@ export default function DCR() {
     const initialFormState = {
         type: 'Doctor',
         name: '',
+        specialist: '',
         district: '',
         city: '',
         productShown: '',
@@ -98,6 +102,7 @@ export default function DCR() {
             setFormData({
                 type: visit.type,
                 name: visit.name,
+                specialist: visit.specialist || '',
                 district: visit.district,
                 city: visit.city,
                 productShown: visit.productShown,
@@ -246,6 +251,7 @@ export default function DCR() {
                                 {visibleColumns.includes('status') && <th className="px-6 py-3 font-medium">Status</th>}
                                 {visibleColumns.includes('type') && <th className="px-6 py-3 font-medium">Type</th>}
                                 {visibleColumns.includes('name') && <th className="px-6 py-3 font-medium">Name</th>}
+                                {visibleColumns.includes('specialist') && <th className="px-6 py-3 font-medium">Specialist</th>}
                                 {visibleColumns.includes('location') && <th className="px-6 py-3 font-medium">Location</th>}
                                 {visibleColumns.includes('visited') && <th className="px-6 py-3 font-medium">Visited</th>}
                                 {visibleColumns.includes('actions') && <th className="px-6 py-3 font-medium text-right">Actions</th>}
@@ -267,6 +273,11 @@ export default function DCR() {
                                     )}
                                     {visibleColumns.includes('type') && <td className="px-6 py-4">{visit.type}</td>}
                                     {visibleColumns.includes('name') && <td className="px-6 py-4 font-medium text-gray-900">{visit.name}</td>}
+                                    {visibleColumns.includes('specialist') && (
+                                        <td className="px-6 py-4 text-gray-500">
+                                            {visit.specialist || '-'}
+                                        </td>
+                                    )}
                                     {visibleColumns.includes('location') && (
                                         <td className="px-6 py-4 text-gray-500">
                                             <div className="flex flex-col">
@@ -336,6 +347,23 @@ export default function DCR() {
                             disabled={!!editingVisit}
                             required
                         />
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Specialist</label>
+                        <select
+                            value={formData.specialist}
+                            onChange={(e) => setFormData({ ...formData, specialist: e.target.value })}
+                            disabled={!!editingVisit}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100"
+                        >
+                            <option value="">Select Specialist</option>
+                            {SPECIALISTS.map((spec) => (
+                                <option key={spec} value={spec}>
+                                    {spec}
+                                </option>
+                            ))}
+                        </select>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">

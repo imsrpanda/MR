@@ -12,9 +12,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { PRODUCTS } from '../constants/products';
 
+const SPECIALISTS = ['D&G', 'SVR', 'URO', 'PED', 'PHY', 'GP', 'CP', 'MBBSORTH', 'CHESTSKIN', 'NEU', 'OTHER'];
+
 const MASTER_RECORDS_COLS_DEF = [
     { id: 'type', label: 'Type' },
     { id: 'name', label: 'Name' },
+    { id: 'specialist', label: 'Specialist' },
     { id: 'location', label: 'Location' },
     { id: 'visited', label: 'Visited' },
     { id: 'product', label: 'Product' },
@@ -45,6 +48,7 @@ export default function MasterRecords() {
     const initialFormState = {
         type: 'Doctor',
         name: '',
+        specialist: '',
         district: '',
         city: '',
         visited: false,
@@ -109,6 +113,7 @@ export default function MasterRecords() {
             setFormData({
                 type: record.type,
                 name: record.name,
+                specialist: record.specialist || '',
                 district: record.district,
                 city: record.city,
                 visited: record.visited,
@@ -300,6 +305,7 @@ export default function MasterRecords() {
 
                                 {visibleColumns.includes('type') && <th className="px-6 py-3 font-medium">Type</th>}
                                 {visibleColumns.includes('name') && <th className="px-6 py-3 font-medium">Name</th>}
+                                {visibleColumns.includes('specialist') && <th className="px-6 py-3 font-medium">Specialist</th>}
                                 {visibleColumns.includes('location') && <th className="px-6 py-3 font-medium">Location</th>}
                                 {visibleColumns.includes('visited') && <th className="px-6 py-3 font-medium">Visited</th>}
                                 {visibleColumns.includes('product') && <th className="px-6 py-3 font-medium">Product</th>}
@@ -318,6 +324,11 @@ export default function MasterRecords() {
                                         </td>
                                     )}
                                     {visibleColumns.includes('name') && <td className="px-6 py-4 font-medium text-gray-900">{record.name}</td>}
+                                    {visibleColumns.includes('specialist') && (
+                                        <td className="px-6 py-4 text-gray-500">
+                                            {record.specialist || '-'}
+                                        </td>
+                                    )}
                                     {visibleColumns.includes('location') && (
                                         <td className="px-6 py-4 text-gray-500">
                                             <div className="flex flex-col">
@@ -400,6 +411,22 @@ export default function MasterRecords() {
                         placeholder="e.g. John Doe"
                         required
                     />
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Specialist</label>
+                        <select
+                            value={formData.specialist}
+                            onChange={(e) => setFormData({ ...formData, specialist: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                        >
+                            <option value="">Select Specialist</option>
+                            {SPECIALISTS.map((spec) => (
+                                <option key={spec} value={spec}>
+                                    {spec}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
 
                     <div className="grid grid-cols-2 gap-4">
                         <div>
