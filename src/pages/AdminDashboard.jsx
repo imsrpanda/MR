@@ -17,6 +17,7 @@ const APPROVALS_COLS_DEF = [
     { id: 'actions', label: 'Actions' }
 ];
 
+// Column Definitions for Employees Table
 const EMPLOYEES_COLS_DEF = [
     { id: 'name', label: 'Name' },
     { id: 'email', label: 'Email' },
