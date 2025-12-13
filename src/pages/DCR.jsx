@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,10 +11,10 @@ import MultiSelect from '../components/ui/MultiSelect';
 import { useAuth } from '../contexts/AuthContext';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { PRODUCTS } from '../constants/products';
-
-const SPECIALISTS = ['D&G', 'SVR', 'URO', 'PED', 'PHY', 'GP', 'CP', 'MBBSORTH', 'CHESTSKIN', 'NEU', 'OTHER'];
+import { SPECIALISTS } from '../constants/specialists';
 
 const DCR_COLS_DEF = [
+    { id: 'createdDate', label: 'Date' },
     { id: 'status', label: 'Status' },
     { id: 'type', label: 'Type' },
     { id: 'name', label: 'Name' },
@@ -29,11 +29,14 @@ export default function DCR() {
     const [visits, setVisits] = useState([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+    const [masterRecords, setMasterRecords] = useState([]);
+    const [dcrCities, setDcrCities] = useState([]);
+    const [showSuggestions, setShowSuggestions] = useState(false);
 
     // Column Preferences State
     const [visibleColumns, setVisibleColumns] = useState(() => {
         const saved = localStorage.getItem('dcr_columns');
-        return saved ? JSON.parse(saved) : ['name', 'status', 'actions'];
+        return saved ? JSON.parse(saved) : ['createdDate', 'name', 'status', 'actions'];
     });
 
     useEffect(() => {
@@ -96,6 +99,47 @@ export default function DCR() {
         return () => unsubscribe();
     }, [userRole, currentUser]);
 
+    // Subscribe to Master Records for suggestions
+    useEffect(() => {
+        const q = query(collection(db, "master_records"), orderBy("name"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const data = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setMasterRecords(data);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    // Filter Master Records for Auto-complete
+    const filteredMasterOptions = useMemo(() => {
+        return masterRecords.filter(record => {
+            // Filter by Type
+            if (record.type !== formData.type) return false;
+
+            // Filter by User Assignments
+            if (userRole === 'user') {
+                const assignedDistricts = userData?.assignedDistricts || [];
+                const assignedCities = userData?.assignedCities || [];
+                const assignedSpecialities = userData?.assignedSpecialities || [];
+
+                // Location Access
+                const hasLocationAccess =
+                    assignedDistricts.includes(record.district) ||
+                    assignedCities.includes(record.city);
+
+                if (!hasLocationAccess) return false;
+
+                // Speciality Access
+                if (assignedSpecialities.length > 0) {
+                    if (!assignedSpecialities.includes(record.specialist)) return false;
+                }
+            }
+            return true;
+        });
+    }, [masterRecords, formData.type, userRole, userData]);
+
     const handleOpenModal = (visit = null) => {
         if (visit) {
             setEditingVisit(visit);
@@ -111,17 +155,77 @@ export default function DCR() {
                 comment: visit.comment || '',
                 location: visit.location || null
             });
+            // Fetch cities for existing visit
+            if (visit.district) {
+                const fetchCities = async () => {
+                    try {
+                        const docRef = doc(db, "district_locations", visit.district);
+                        const docSnap = await getDoc(docRef);
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            if (Array.isArray(data.cities)) {
+                                setDcrCities(data.cities);
+                            } else if (typeof data.cities === 'string') {
+                                setDcrCities(data.cities.split(',').map(c => c.trim()).filter(c => c));
+                            } else {
+                                setDcrCities([]);
+                            }
+                        } else {
+                            setDcrCities([]);
+                        }
+                    } catch (error) {
+                        console.error("Error fetching cities for visit:", error);
+                        setDcrCities([]);
+                    }
+                };
+                fetchCities();
+            }
         } else {
             setEditingVisit(null);
             setFormData(initialFormState);
+            setDcrCities([]);
         }
         setIsModalOpen(true);
     };
+
+    // Watch for district changes to update available cities
+    useEffect(() => {
+        const fetchCities = async () => {
+            if (!formData.district) {
+                setDcrCities([]);
+                return;
+            }
+            try {
+                const docRef = doc(db, "district_locations", formData.district);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (Array.isArray(data.cities)) {
+                        setDcrCities(data.cities);
+                    } else if (typeof data.cities === 'string') {
+                        setDcrCities(data.cities.split(',').map(c => c.trim()).filter(c => c));
+                    } else {
+                        setDcrCities([]);
+                    }
+                } else {
+                    setDcrCities([]);
+                }
+            } catch (error) {
+                console.error("Error fetching cities:", error);
+                setDcrCities([]);
+            }
+        };
+
+        if (isModalOpen) {
+            fetchCities();
+        }
+    }, [formData.district, isModalOpen]);
 
     const handleCloseModal = () => {
         setIsModalOpen(false);
         setEditingVisit(null);
         setFormData(initialFormState);
+        setDcrCities([]);
     };
 
     const getLocation = () => {
@@ -248,6 +352,7 @@ export default function DCR() {
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-50 text-gray-500 uppercase">
                             <tr>
+                                {visibleColumns.includes('createdDate') && <th className="px-6 py-3 font-medium">Date</th>}
                                 {visibleColumns.includes('status') && <th className="px-6 py-3 font-medium">Status</th>}
                                 {visibleColumns.includes('type') && <th className="px-6 py-3 font-medium">Type</th>}
                                 {visibleColumns.includes('name') && <th className="px-6 py-3 font-medium">Name</th>}
@@ -260,6 +365,11 @@ export default function DCR() {
                         <tbody className="divide-y divide-gray-100">
                             {filteredVisits.map((visit) => (
                                 <tr key={visit.id} className="hover:bg-gray-50 transition-colors">
+                                    {visibleColumns.includes('createdDate') && (
+                                        <td className="px-6 py-4 text-gray-500 whitespace-nowrap">
+                                            {visit.createdAt?.seconds ? new Date(visit.createdAt.seconds * 1000).toLocaleDateString() : '-'}
+                                        </td>
+                                    )}
                                     {visibleColumns.includes('status') && (
                                         <td className="px-6 py-4">
                                             <span className={`px-2 py-1 rounded-full text-xs font-medium 
@@ -340,13 +450,66 @@ export default function DCR() {
                                 <option value="Chemist">Chemist</option>
                             </select>
                         </div>
-                        <Input
-                            label="Name"
-                            value={formData.name}
-                            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            disabled={!!editingVisit}
-                            required
-                        />
+                        <div className="relative">
+                            <Input
+                                label="Name"
+                                value={formData.name}
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    setFormData(prev => ({ ...prev, name: val }));
+                                    setShowSuggestions(true);
+
+                                    // Auto-fill if exact match typed
+                                    const matchedRecord = filteredMasterOptions.find(r => r.name.toLowerCase() === val.toLowerCase());
+                                    if (matchedRecord) {
+                                        setFormData(prev => ({
+                                            ...prev,
+                                            name: matchedRecord.name,
+                                            specialist: matchedRecord.specialist || prev.specialist,
+                                            district: matchedRecord.district || prev.district,
+                                            city: matchedRecord.city || prev.city
+                                        }));
+                                    }
+                                }}
+                                onFocus={() => setShowSuggestions(true)}
+                                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                                disabled={!!editingVisit}
+                                placeholder="Type to search..."
+                                autoComplete="off"
+                                required
+                            />
+                            {showSuggestions && !editingVisit && formData.name && (
+                                <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded-b-lg shadow-lg max-h-60 overflow-y-auto mt-1 left-0">
+                                    {filteredMasterOptions
+                                        .filter(r => r.name.toLowerCase().includes(formData.name.toLowerCase()))
+                                        .map((record) => (
+                                            <li
+                                                key={record.id}
+                                                className="px-4 py-2 hover:bg-gray-100 cursor-pointer text-sm border-b last:border-b-0 border-gray-100"
+                                                onMouseDown={() => {
+                                                    setFormData(prev => ({
+                                                        ...prev,
+                                                        name: record.name,
+                                                        specialist: record.specialist || prev.specialist,
+                                                        district: record.district || prev.district,
+                                                        city: record.city || prev.city
+                                                    }));
+                                                    setShowSuggestions(false);
+                                                }}
+                                            >
+                                                <div className="font-medium text-gray-900">{record.name}</div>
+                                                <div className="text-xs text-gray-500">
+                                                    {record.city}{record.district ? `, ${record.district}` : ''}
+                                                    {record.specialist ? ` • ${record.specialist}` : ''}
+                                                </div>
+                                            </li>
+                                        ))}
+                                    {filteredMasterOptions.filter(r => r.name.toLowerCase().includes(formData.name.toLowerCase())).length === 0 && (
+                                        <li className="px-4 py-2 text-sm text-gray-500 italic">No matches found</li>
+                                    )}
+                                </ul>
+                            )}
+                        </div>
                     </div>
 
                     <div>
@@ -382,13 +545,23 @@ export default function DCR() {
                                 ))}
                             </select>
                         </div>
-                        <Input
-                            label="City"
-                            value={formData.city}
-                            onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                            disabled={!!editingVisit}
-                            required
-                        />
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                            <select
+                                value={formData.city}
+                                onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                                disabled={!!editingVisit || !formData.district}
+                                className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100"
+                                required
+                            >
+                                <option value="">Select City</option>
+                                {dcrCities.map((city) => (
+                                    <option key={city} value={city}>
+                                        {city}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
 
                     <div className="mb-4">
@@ -397,7 +570,7 @@ export default function DCR() {
                             options={PRODUCTS}
                             value={formData.productShown ? formData.productShown.split(',').map(p => p.trim()).filter(p => p) : []}
                             onChange={(newVal) => setFormData({ ...formData, productShown: newVal.join(', ') })}
-                            disabled={userRole === 'admin' || (editingVisit && (editingVisit.status === 'Visited' || editingVisit.status === 'Rejected'))}
+                            disabled={!editingVisit || userRole === 'admin' || (editingVisit && (editingVisit.status === 'Visited' || editingVisit.status === 'Rejected'))}
                             placeholder="Select products..."
                         />
                     </div>

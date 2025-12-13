@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, onSnapshot, query, orderBy, serverTimestamp, where } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,8 +11,7 @@ import MultiSelect from '../components/ui/MultiSelect';
 import { useAuth } from '../contexts/AuthContext';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { PRODUCTS } from '../constants/products';
-
-const SPECIALISTS = ['D&G', 'SVR', 'URO', 'PED', 'PHY', 'GP', 'CP', 'MBBSORTH', 'CHESTSKIN', 'NEU', 'OTHER'];
+import { SPECIALISTS } from '../constants/specialists';
 
 const MASTER_RECORDS_COLS_DEF = [
     { id: 'type', label: 'Type' },
@@ -57,7 +56,100 @@ export default function MasterRecords() {
     const [formData, setFormData] = useState(initialFormState);
 
     // Pending Approvals State
+    // Pending Approvals State
     const [pendingApprovals, setPendingApprovals] = useState([]);
+    const [recordCities, setRecordCities] = useState([]);
+
+    // City Modal State
+    const [isCityModalOpen, setIsCityModalOpen] = useState(false);
+    const [cityFormData, setCityFormData] = useState({ district: '', cities: [] });
+    const [cityInput, setCityInput] = useState('');
+
+    // Handle District Change in City Modal
+    const handleCityDistrictChange = async (e) => {
+        const district = e.target.value;
+        if (!district) {
+            setCityFormData({ district: '', cities: [] });
+            return;
+        }
+
+        // Optimistic update
+        setCityFormData(prev => ({ ...prev, district }));
+        setCityInput('');
+
+        try {
+            const docRef = doc(db, "district_locations", district);
+            const docSnap = await getDoc(docRef);
+
+            if (docSnap.exists()) {
+                const data = docSnap.data();
+                // Handle both array and legacy string format if any
+                let cities = [];
+                if (Array.isArray(data.cities)) {
+                    cities = data.cities;
+                } else if (typeof data.cities === 'string') {
+                    cities = data.cities.split(',').map(c => c.trim()).filter(c => c);
+                }
+                setCityFormData({ district, cities });
+            } else {
+                setCityFormData({ district, cities: [] });
+            }
+        } catch (error) {
+            console.error("Error fetching district cities:", error);
+        }
+    };
+
+    const handleAddCity = (val) => {
+        const trimmed = val.trim();
+        if (trimmed && !cityFormData.cities.includes(trimmed)) {
+            setCityFormData(prev => ({ ...prev, cities: [...prev.cities, trimmed] }));
+        }
+        setCityInput('');
+    };
+
+    const handleRemoveCity = (cityToRemove) => {
+        setCityFormData(prev => ({
+            ...prev,
+            cities: prev.cities.filter(c => c !== cityToRemove)
+        }));
+    };
+
+    const handleCityKeyDown = (e) => {
+        if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',') {
+            e.preventDefault();
+            handleAddCity(cityInput);
+        } else if (e.key === 'Backspace' && !cityInput && cityFormData.cities.length > 0) {
+            handleRemoveCity(cityFormData.cities[cityFormData.cities.length - 1]);
+        }
+    };
+
+    const handleCitySubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            // Add current input if exists before submitting
+            let finalCities = [...cityFormData.cities];
+            if (cityInput.trim()) {
+                finalCities.push(cityInput.trim());
+            }
+
+            await setDoc(doc(db, "district_locations", cityFormData.district), {
+                district: cityFormData.district,
+                cities: finalCities,
+                updatedAt: serverTimestamp(),
+                updatedBy: currentUser.uid
+            });
+            alert("Cities updated successfully!");
+            setIsCityModalOpen(false);
+            setCityFormData({ district: '', cities: [] });
+            setCityInput('');
+        } catch (error) {
+            console.error("Error saving cities:", error);
+            alert("Error saving cities");
+        } finally {
+            setLoading(false);
+        }
+    };
 
     // Calculate available districts based on user role
     const availableDistricts = useMemo(() => {
@@ -119,12 +211,76 @@ export default function MasterRecords() {
                 visited: record.visited,
                 productShown: record.productShown || ''
             });
+            // Fetch cities for the existing record's district immediately so the dropdown is populated
+            if (record.district) {
+                const fetchCities = async () => {
+                    try {
+                        const docRef = doc(db, "district_locations", record.district);
+                        const docSnap = await getDoc(docRef);
+                        if (docSnap.exists()) {
+                            const data = docSnap.data();
+                            if (Array.isArray(data.cities)) {
+                                setRecordCities(data.cities);
+                            } else if (typeof data.cities === 'string') {
+                                setRecordCities(data.cities.split(',').map(c => c.trim()).filter(c => c));
+                            } else {
+                                setRecordCities([]);
+                            }
+                        } else {
+                            setRecordCities([]);
+                        }
+                    } catch (error) {
+                        console.error("Error fetching cities for record:", error);
+                        setRecordCities([]);
+                    }
+                };
+                fetchCities();
+            }
         } else {
             setEditingRecord(null);
             setFormData(initialFormState);
+            setRecordCities([]);
         }
         setIsModalOpen(true);
     };
+
+    // Watch for district changes in the form to update available cities
+    useEffect(() => {
+        const fetchCities = async () => {
+            if (!formData.district) {
+                setRecordCities([]);
+                return;
+            }
+
+            // Avoid refetching if we already have cities for this district and it matches what we want
+            // But simplification: just fetch always ensuring fresh data, or we could rely on the modal open logic
+            // To keep it simple and responsive to user changing district in dropdown:
+            try {
+                const docRef = doc(db, "district_locations", formData.district);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (Array.isArray(data.cities)) {
+                        setRecordCities(data.cities);
+                    } else if (typeof data.cities === 'string') {
+                        setRecordCities(data.cities.split(',').map(c => c.trim()).filter(c => c));
+                    } else {
+                        setRecordCities([]);
+                    }
+                } else {
+                    setRecordCities([]);
+                }
+            } catch (error) {
+                console.error("Error fetching cities:", error);
+                setRecordCities([]);
+            }
+        };
+
+        // Only fetch if the modal is open to avoid unnecessary reads
+        if (isModalOpen) {
+            fetchCities();
+        }
+    }, [formData.district, isModalOpen]);
 
     const handleCloseModal = () => {
         setIsModalOpen(false);
@@ -250,11 +406,22 @@ export default function MasterRecords() {
     };
 
     const filteredRecords = records.filter(record => {
-        // Filter by assigned districts for 'user' role
+        // Filter by assignments for 'user' role
         if (userRole === 'user') {
             const assignedDistricts = userData?.assignedDistricts || [];
-            if (!assignedDistricts.includes(record.district)) {
-                return false;
+            const assignedCities = userData?.assignedCities || [];
+            const assignedSpecialities = userData?.assignedSpecialities || [];
+
+            // 1. Location Check: Must be in one of the assigned districts OR assigned cities
+            const hasLocationAccess =
+                assignedDistricts.includes(record.district) ||
+                assignedCities.includes(record.city);
+
+            if (!hasLocationAccess) return false;
+
+            // 2. Speciality Check: If specialities are assigned, record must match
+            if (assignedSpecialities.length > 0) {
+                if (!assignedSpecialities.includes(record.specialist)) return false;
             }
         }
 
@@ -291,6 +458,11 @@ export default function MasterRecords() {
                             visibleColumns={visibleColumns}
                             onChange={setVisibleColumns}
                         />
+                        {userRole === 'admin' && (
+                            <Button onClick={() => setIsCityModalOpen(true)} className="bg-indigo-600">
+                                City
+                            </Button>
+                        )}
                         <Button onClick={() => handleOpenModal()}>
                             + Add New Record
                         </Button>
@@ -446,13 +618,23 @@ export default function MasterRecords() {
                             </select>
                         </div>
 
-                        <Input
-                            label="City"
-                            value={formData.city}
-                            onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                            placeholder="e.g. Manhattan"
-                            required
-                        />
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                            <select
+                                value={formData.city}
+                                onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                                required
+                                disabled={!formData.district}
+                            >
+                                <option value="">Select City</option>
+                                {recordCities.map((city) => (
+                                    <option key={city} value={city}>
+                                        {city}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
 
                     <div className="flex items-center gap-2 py-2">
@@ -483,6 +665,80 @@ export default function MasterRecords() {
                         </Button>
                         <Button type="submit" disabled={loading} className="flex-1">
                             {loading ? 'Saving...' : 'Save Record'}
+                        </Button>
+                    </div>
+                </form>
+            </Modal>
+
+            {/* City Management Modal */}
+            <Modal
+                isOpen={isCityModalOpen}
+                onClose={() => setIsCityModalOpen(false)}
+                title="Manage District Cities"
+            >
+                <form onSubmit={handleCitySubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">District</label>
+                        <select
+                            value={cityFormData.district}
+                            onChange={handleCityDistrictChange}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                            required
+                        >
+                            <option value="">Select District</option>
+                            {ODISHA_DISTRICTS.map((district) => (
+                                <option key={district} value={district}>
+                                    {district}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {cityFormData.district && (
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Cities</label>
+                            <div className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 min-h-[100px] flex flex-wrap gap-2 items-start content-start"
+                                onClick={() => document.getElementById('city-input').focus()}
+                            >
+                                {cityFormData.cities.map((city, index) => (
+                                    <span key={index} className="inline-flex items-center px-2 py-1 rounded bg-indigo-100 text-indigo-800 text-sm border border-indigo-200 animate-in fade-in zoom-in duration-200">
+                                        {city}
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleRemoveCity(city);
+                                            }}
+                                            className="ml-1 text-indigo-600 hover:text-indigo-900 focus:outline-none rounded-full p-0.5 hover:bg-indigo-200 transition-colors"
+                                        >
+                                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        </button>
+                                    </span>
+                                ))}
+                                <input
+                                    id="city-input"
+                                    type="text"
+                                    value={cityInput}
+                                    onChange={(e) => setCityInput(e.target.value)}
+                                    onKeyDown={handleCityKeyDown}
+                                    className="flex-1 min-w-[120px] outline-none border-none focus:ring-0 p-1 text-sm bg-transparent"
+                                    placeholder={cityFormData.cities.length === 0 ? "Type city and press Enter/Tab/Comma..." : ""}
+                                />
+                            </div>
+                            <p className="mt-1 text-xs text-gray-500">
+                                Type a city name and press Enter, Tab, or Comma to add it.
+                            </p>
+                        </div>
+                    )}
+
+                    <div className="pt-4 flex gap-3">
+                        <Button type="button" variant="secondary" onClick={() => setIsCityModalOpen(false)} className="flex-1">
+                            Cancel
+                        </Button>
+                        <Button type="submit" disabled={loading} className="flex-1">
+                            {loading ? 'Saving...' : 'Save Cities'}
                         </Button>
                     </div>
                 </form>

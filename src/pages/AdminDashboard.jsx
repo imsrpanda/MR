@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, deleteDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
 import { ODISHA_DISTRICTS } from '../constants/districts';
+import { SPECIALISTS } from '../constants/specialists';
 
 const APPROVALS_COLS_DEF = [
     { id: 'name', label: 'Name' },
@@ -19,7 +20,7 @@ const APPROVALS_COLS_DEF = [
 const EMPLOYEES_COLS_DEF = [
     { id: 'name', label: 'Name' },
     { id: 'email', label: 'Email' },
-    { id: 'districts', label: 'Assigned Districts' },
+    { id: 'districts', label: 'Assignments' },
     { id: 'action', label: 'Action' }
 ];
 
@@ -48,6 +49,10 @@ export default function AdminDashboard() {
     const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
     const [selectedEmployee, setSelectedEmployee] = useState(null);
     const [tempAssignedDistricts, setTempAssignedDistricts] = useState([]);
+    const [tempAssignedCities, setTempAssignedCities] = useState([]);
+    const [tempAssignedSpecialities, setTempAssignedSpecialities] = useState([]);
+    const [viewingDistrict, setViewingDistrict] = useState('');
+    const [availableCities, setAvailableCities] = useState([]);
     const [saving, setSaving] = useState(false);
 
     // Approval Modal State
@@ -114,9 +119,42 @@ export default function AdminDashboard() {
         };
     }, []);
 
+    // Fetch cities when viewing district changes
+    useEffect(() => {
+        const fetchCities = async () => {
+            if (!viewingDistrict) {
+                setAvailableCities([]);
+                return;
+            }
+            try {
+                const docRef = doc(db, "district_locations", viewingDistrict);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (Array.isArray(data.cities)) {
+                        setAvailableCities(data.cities);
+                    } else if (typeof data.cities === 'string') {
+                        setAvailableCities(data.cities.split(',').map(c => c.trim()).filter(c => c));
+                    } else {
+                        setAvailableCities([]);
+                    }
+                } else {
+                    setAvailableCities([]);
+                }
+            } catch (error) {
+                console.error("Error fetching cities:", error);
+                setAvailableCities([]);
+            }
+        };
+        fetchCities();
+    }, [viewingDistrict]);
+
     const handleAssignClick = (employee) => {
         setSelectedEmployee(employee);
         setTempAssignedDistricts(employee.assignedDistricts || []);
+        setTempAssignedCities(employee.assignedCities || []);
+        setTempAssignedSpecialities(employee.assignedSpecialities || []);
+        setViewingDistrict(ODISHA_DISTRICTS[0]); // Default to first district
         setIsAssignModalOpen(true);
     };
 
@@ -124,6 +162,10 @@ export default function AdminDashboard() {
         setIsAssignModalOpen(false);
         setSelectedEmployee(null);
         setTempAssignedDistricts([]);
+        setTempAssignedCities([]);
+        setTempAssignedSpecialities([]);
+        setViewingDistrict('');
+        setAvailableCities([]);
     };
 
     const toggleDistrict = (district) => {
@@ -136,12 +178,34 @@ export default function AdminDashboard() {
         });
     };
 
+    const toggleCity = (city) => {
+        setTempAssignedCities(prev => {
+            if (prev.includes(city)) {
+                return prev.filter(c => c !== city);
+            } else {
+                return [...prev, city];
+            }
+        });
+    };
+
+    const toggleSpeciality = (spec) => {
+        setTempAssignedSpecialities(prev => {
+            if (prev.includes(spec)) {
+                return prev.filter(s => s !== spec);
+            } else {
+                return [...prev, spec];
+            }
+        });
+    };
+
     const handleSaveAssignment = async () => {
         if (!selectedEmployee) return;
         setSaving(true);
         try {
             await updateDoc(doc(db, "users", selectedEmployee.id), {
-                assignedDistricts: tempAssignedDistricts
+                assignedDistricts: tempAssignedDistricts,
+                assignedCities: tempAssignedCities,
+                assignedSpecialities: tempAssignedSpecialities
             });
             handleCloseModal();
         } catch (error) {
@@ -364,7 +428,7 @@ export default function AdminDashboard() {
                             <tr>
                                 {employeesColumns.includes('name') && <th className="px-6 py-3 font-medium">Name</th>}
                                 {employeesColumns.includes('email') && <th className="px-6 py-3 font-medium">Email</th>}
-                                {employeesColumns.includes('districts') && <th className="px-6 py-3 font-medium">Assigned Districts</th>}
+                                {employeesColumns.includes('districts') && <th className="px-6 py-3 font-medium">Assignments</th>}
                                 {employeesColumns.includes('action') && <th className="px-6 py-3 font-medium text-right">Action</th>}
                             </tr>
                         </thead>
@@ -375,15 +439,39 @@ export default function AdminDashboard() {
                                     {employeesColumns.includes('email') && <td className="px-6 py-4 text-gray-500">{employee.email}</td>}
                                     {employeesColumns.includes('districts') && (
                                         <td className="px-6 py-4">
-                                            <div className="flex flex-wrap gap-1">
-                                                {employee.assignedDistricts && employee.assignedDistricts.length > 0 ? (
-                                                    employee.assignedDistricts.map((dist, idx) => (
-                                                        <span key={idx} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
-                                                            {dist}
-                                                        </span>
-                                                    ))
-                                                ) : (
-                                                    <span className="text-gray-400 italic">No districts assigned</span>
+                                            <div className="flex flex-col gap-1">
+                                                {employee.assignedDistricts?.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1">
+                                                        <span className="text-xs font-semibold text-gray-500 mr-1">Districts:</span>
+                                                        {employee.assignedDistricts.map((dist, idx) => (
+                                                            <span key={idx} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                                                                {dist}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {employee.assignedCities?.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1">
+                                                        <span className="text-xs font-semibold text-gray-500 mr-1">Cities:</span>
+                                                        {employee.assignedCities.map((city, idx) => (
+                                                            <span key={idx} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                                                {city}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {(!employee.assignedDistricts?.length && !employee.assignedCities?.length && !employee.assignedSpecialities?.length) && (
+                                                    <span className="text-gray-400 italic text-xs">No assignments</span>
+                                                )}
+                                                {employee.assignedSpecialities?.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1">
+                                                        <span className="text-xs font-semibold text-gray-500 mr-1">Specs:</span>
+                                                        {employee.assignedSpecialities.map((spec, idx) => (
+                                                            <span key={idx} className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700 border border-purple-100">
+                                                                {spec}
+                                                            </span>
+                                                        ))}
+                                                    </div>
                                                 )}
                                             </div>
                                         </td>
@@ -418,18 +506,84 @@ export default function AdminDashboard() {
                 <div className="space-y-4">
                     <p className="text-sm text-gray-500">Select the districts this employee is responsible for:</p>
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[300px] overflow-y-auto p-2 border border-gray-200 rounded-lg">
-                        {ODISHA_DISTRICTS.map((district) => (
-                            <label key={district} className="flex items-center space-x-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={tempAssignedDistricts.includes(district)}
-                                    onChange={() => toggleDistrict(district)}
-                                    className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                                />
-                                <span className="text-sm text-gray-700">{district}</span>
-                            </label>
-                        ))}
+                    <div className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Select District to Configure</label>
+                            <select
+                                value={viewingDistrict}
+                                onChange={(e) => setViewingDistrict(e.target.value)}
+                                className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                            >
+                                {ODISHA_DISTRICTS.map((district) => (
+                                    <option key={district} value={district}>
+                                        {district} {tempAssignedDistricts.includes(district) ? '(Assigned)' : ''}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {viewingDistrict && (
+                            <div className="p-4 border border-gray-200 rounded-lg bg-gray-50 flex flex-col gap-4">
+                                {/* District Assignment Toggle */}
+                                <div className="flex items-center space-x-2 border-b border-gray-200 pb-3">
+                                    <input
+                                        type="checkbox"
+                                        id={`dist-check-${viewingDistrict}`}
+                                        checked={tempAssignedDistricts.includes(viewingDistrict)}
+                                        onChange={() => toggleDistrict(viewingDistrict)}
+                                        className="w-5 h-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                    <label htmlFor={`dist-check-${viewingDistrict}`} className="text-base font-semibold text-gray-900 cursor-pointer select-none">
+                                        Assign District: {viewingDistrict}
+                                    </label>
+                                </div>
+
+                                {/* Cities Assignment */}
+                                <div>
+                                    <h5 className="text-sm font-medium text-gray-700 mb-2">Assign Specific Cities</h5>
+                                    {availableCities.length > 0 ? (
+                                        <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto">
+                                            {availableCities.map((city) => (
+                                                <label key={city} className="flex items-center space-x-2 p-1 hover:bg-gray-100 rounded cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={tempAssignedCities.includes(city)}
+                                                        onChange={() => toggleCity(city)}
+                                                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                                    />
+                                                    <span className="text-sm text-gray-600">{city}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-gray-400 italic">No cities found for this district.</p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Summary of Assignments */}
+                        <div className="text-xs text-gray-500 border-t pt-2">
+                            Summary: {tempAssignedDistricts.length} Districts, {tempAssignedCities.length} Cities assigned.
+                        </div>
+                    </div>
+
+                    {/* Specialities Assignment */}
+                    <div className="border-t border-gray-200 pt-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Assign Specialities</label>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 border border-gray-200 rounded-lg p-3 max-h-[150px] overflow-y-auto">
+                            {SPECIALISTS.map((spec) => (
+                                <label key={spec} className="flex items-center space-x-2 p-1 hover:bg-gray-50 rounded cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={tempAssignedSpecialities.includes(spec)}
+                                        onChange={() => toggleSpeciality(spec)}
+                                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                    />
+                                    <span className="text-sm text-gray-700">{spec}</span>
+                                </label>
+                            ))}
+                        </div>
                     </div>
 
                     <div className="pt-4 flex gap-3">
