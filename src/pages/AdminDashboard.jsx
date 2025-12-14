@@ -8,6 +8,7 @@ import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { SPECIALISTS } from '../constants/specialists';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
 const APPROVALS_COLS_DEF = [
     { id: 'name', label: 'Name' },
@@ -29,10 +30,14 @@ export default function AdminDashboard() {
     const [stats, setStats] = useState({
         doctors: 0,
         chemists: 0,
-        employees: 0
+        employees: 0,
+        totalVisits: 0
     });
     const [employees, setEmployees] = useState([]);
     const [pendingApprovals, setPendingApprovals] = useState([]);
+    const [userVisitCounts, setUserVisitCounts] = useState([]);
+    const [visitDates, setVisitDates] = useState([]);
+    const [trendPeriod, setTrendPeriod] = useState('day'); // day, week, month, year
     const [loading, setLoading] = useState(true);
 
     // Column Preferences State
@@ -103,6 +108,35 @@ export default function AdminDashboard() {
             setLoading(false);
         });
 
+        // Subscribe to Visits to count completed visits
+        const qVisits = query(collection(db, "visits"), where("status", "==", "Visited"));
+        const unsubscribeVisits = onSnapshot(qVisits, (snapshot) => {
+
+            // Calculate visits per user and store raw dates
+            const counts = {};
+            const dates = [];
+
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                // Count per user
+                if (data.createdBy) {
+                    counts[data.createdBy] = (counts[data.createdBy] || 0) + 1;
+                }
+                // Store date
+                const timestamp = data.visitedAt || data.updatedAt || data.createdAt;
+                if (timestamp) {
+                    dates.push(timestamp.toDate());
+                }
+            });
+
+            setStats(prev => ({
+                ...prev,
+                totalVisits: snapshot.size
+            }));
+            setUserVisitCounts(counts);
+            setVisitDates(dates);
+        });
+
         // Subscribe to Pending Approvals
         const qApprovals = query(collection(db, "pending_approvals"), where("status", "==", "PENDING"));
         const unsubscribeApprovals = onSnapshot(qApprovals, (snapshot) => {
@@ -117,6 +151,7 @@ export default function AdminDashboard() {
             unsubscribeRecords();
             unsubscribeUsers();
             unsubscribeApprovals();
+            unsubscribeVisits();
         };
     }, []);
 
@@ -277,13 +312,70 @@ export default function AdminDashboard() {
         }
     };
 
+    // Helper for Chart Data Aggregation
+    const getTrendData = (dates, period) => {
+        if (!dates.length) return [];
+
+        const now = new Date();
+        const map = new Map();
+
+        // Helper to format date keys
+        const formatDate = (date) => {
+            if (period === 'day') return date.toISOString().split('T')[0];
+            if (period === 'week') {
+                const d = new Date(date);
+                d.setHours(0, 0, 0, 0);
+                d.setDate(d.getDate() - d.getDay() + 1); // Monday
+                return d.toISOString().split('T')[0];
+            }
+            if (period === 'month') return date.toISOString().slice(0, 7); // YYYY-MM
+            if (period === 'year') return date.getFullYear().toString();
+            return date.toISOString().split('T')[0];
+        };
+
+        const formatLabel = (key) => {
+            const date = new Date(key);
+            if (period === 'day') return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            if (period === 'week') return `Wk ${getWeekNumber(date)}`;
+            if (period === 'month') return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+            if (period === 'year') return key;
+            return key;
+        };
+
+        const getWeekNumber = (d) => {
+            d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+            d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+            var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+            var weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+            return weekNo;
+        }
+
+        // Filter and Fill Data
+        // For simplicity, we just aggregate what we have. 
+        // Filling gaps (0 visits) would be ideal but logic heavy for this snippet.
+
+        // Sort dates asc
+        const sortedDates = [...dates].sort((a, b) => a - b);
+
+        sortedDates.forEach(date => {
+            const key = formatDate(date);
+            map.set(key, (map.get(key) || 0) + 1);
+        });
+
+        // Convert Map to Array
+        return Array.from(map.entries()).map(([key, value]) => ({
+            name: formatLabel(key),
+            visits: value
+        }));
+    };
+
     return (
         <DashboardLayout
             title="Admin Dashboard"
             backgroundClass="bg-gradient-to-br from-blue-100 via-indigo-100 to-purple-100"
         >
             {/* Analytics Cards */}
-            <div className="grid gap-4 md:grid-cols-3 mb-6">
+            <div className="grid gap-4 md:grid-cols-4 mb-6">
                 <Card className="p-4 border-l-4 border-indigo-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
                     <div className="flex items-center justify-between">
                         <div>
@@ -325,7 +417,123 @@ export default function AdminDashboard() {
                         </div>
                     </div>
                 </Card>
+
+                <Card className="p-4 border-l-4 border-blue-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Visits</h3>
+                            <p className="text-2xl font-bold text-gray-900 mt-1">
+                                {loading ? '...' : stats.totalVisits}
+                            </p>
+                        </div>
+                        <div className="p-2 bg-blue-50 rounded-full">
+                            <span className="text-xl">✅</span>
+                        </div>
+                    </div>
+                </Card>
             </div>
+
+            {/* Visit Trends Chart */}
+            <Card className="p-6 mb-8 bg-white/60 backdrop-blur-lg shadow-lg border-white/50 border-l-4 border-indigo-500">
+                <div className="flex flex-col sm:flex-row justify-between items-center mb-6">
+                    <div>
+                        <h3 className="text-lg font-semibold text-gray-900">Visit Trends</h3>
+                        <p className="text-sm text-gray-500">Visualizing completed visits over time.</p>
+                    </div>
+                    <div className="flex space-x-2 mt-4 sm:mt-0">
+                        {['day', 'week', 'month', 'year'].map((period) => (
+                            <button
+                                key={period}
+                                onClick={() => setTrendPeriod(period)}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${trendPeriod === period
+                                        ? 'bg-indigo-600 text-white shadow-md'
+                                        : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+                                    }`}
+                            >
+                                {period.charAt(0).toUpperCase() + period.slice(1)}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="h-[300px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={getTrendData(visitDates, trendPeriod)}>
+                            <defs>
+                                <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                            <XAxis
+                                dataKey="name"
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: '#6b7280', fontSize: 12 }}
+                                dy={10}
+                            />
+                            <YAxis
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: '#6b7280', fontSize: 12 }}
+                            />
+                            <Tooltip
+                                contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', border: 'none' }}
+                                itemStyle={{ color: '#4f46e5' }}
+                            />
+                            <Area
+                                type="monotone"
+                                dataKey="visits"
+                                stroke="#6366f1"
+                                strokeWidth={3}
+                                fillOpacity={1}
+                                fill="url(#colorVisits)"
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </div>
+            </Card>
+
+            {/* Visits by User Widget */}
+            {userVisitCounts && Object.keys(userVisitCounts).length > 0 && (
+                <Card className="p-0 overflow-hidden flex flex-col mb-8 border-l-4 border-blue-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
+                    <div className="p-6 border-b border-gray-100/50 flex justify-between items-center">
+                        <h3 className="text-lg font-semibold text-gray-900">Visits by User</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-gray-50/50 text-gray-500 uppercase">
+                                <tr>
+                                    <th className="px-6 py-3 font-medium">Employee Name</th>
+                                    <th className="px-6 py-3 font-medium">Email</th>
+                                    <th className="px-6 py-3 font-medium text-right">Completed Visits</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {Object.entries(userVisitCounts)
+                                    .map(([uid, count]) => {
+                                        const employee = employees.find(e => e.id === uid);
+                                        return {
+                                            id: uid,
+                                            name: employee?.name || 'Unknown User',
+                                            email: employee?.email || '-',
+                                            count: count
+                                        };
+                                    })
+                                    .sort((a, b) => b.count - a.count)
+                                    .map((user) => (
+                                        <tr key={user.id} className="hover:bg-white/40">
+                                            <td className="px-6 py-4 font-medium text-gray-900">{user.name}</td>
+                                            <td className="px-6 py-4 text-gray-500">{user.email}</td>
+                                            <td className="px-6 py-4 text-right font-bold text-blue-600">{user.count}</td>
+                                        </tr>
+                                    ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </Card>
+            )}
 
             {/* Pending Approvals Section */}
             {pendingApprovals.length > 0 && (

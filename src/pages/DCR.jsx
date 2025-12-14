@@ -21,11 +21,12 @@ const DCR_COLS_DEF = [
     { id: 'specialist', label: 'Specialist' },
     { id: 'location', label: 'Location' },
     { id: 'visited', label: 'Visited' },
+    { id: 'visitedAt', label: 'Visited Time' },
     { id: 'actions', label: 'Actions' }
 ];
 
 export default function DCR() {
-    const { userRole, userData, currentUser } = useAuth();
+    const { userRole, userData, currentUser, loading: authLoading } = useAuth();
     const [visits, setVisits] = useState([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
@@ -71,12 +72,12 @@ export default function DCR() {
 
     // Subscribe to Visits
     useEffect(() => {
+        if (!currentUser) return;
         let q;
         if (userRole === 'user') {
             q = query(
                 collection(db, "visits"),
-                where("createdBy", "==", currentUser.uid),
-                orderBy("createdAt", "desc")
+                where("createdBy", "==", currentUser.uid)
             );
         } else {
             // Admin sees all
@@ -88,6 +89,8 @@ export default function DCR() {
                 id: doc.id,
                 ...doc.data()
             }));
+            // Client-side sort to avoid index requirements
+            data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
             setVisits(data);
         }, (error) => {
             console.error("Error fetching visits:", error);
@@ -108,6 +111,8 @@ export default function DCR() {
                 ...doc.data()
             }));
             setMasterRecords(data);
+        }, (error) => {
+            console.error("Error fetching master records:", error);
         });
         return () => unsubscribe();
     }, []);
@@ -123,6 +128,10 @@ export default function DCR() {
                 const assignedDistricts = userData?.assignedDistricts || [];
                 const assignedCities = userData?.assignedCities || [];
                 const assignedSpecialities = userData?.assignedSpecialities || [];
+
+                // If userData is not loaded yet, don't show any options just to be safe, or allow all? 
+                // Better to be safe: if user is logged in they should have data. 
+                if (!userData) return false;
 
                 // Location Access
                 const hasLocationAccess =
@@ -260,12 +269,12 @@ export default function DCR() {
                 try {
                     const location = await getLocation();
                     dataToSave.location = location;
-                    dataToSave.status = 'Visited';
                 } catch (error) {
-                    alert("Error getting location: " + error.message + ". Please enable location services.");
-                    setLoading(false);
-                    return;
+                    console.warn("Location not captured:", error);
+                    // Continue without location
                 }
+                dataToSave.status = 'Visited';
+                dataToSave.visitedAt = serverTimestamp();
             }
 
             if (editingVisit) {
@@ -314,10 +323,14 @@ export default function DCR() {
     };
 
     const filteredVisits = visits.filter(visit =>
-        visit.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        visit.city.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        visit.district.toLowerCase().includes(searchQuery.toLowerCase())
+        (visit.name && visit.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (visit.city && visit.city.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (visit.district && visit.district.toLowerCase().includes(searchQuery.toLowerCase()))
     );
+
+    if (authLoading || !currentUser) {
+        return <div className="p-8 flex justify-center text-gray-500">Loading user data...</div>;
+    }
 
     return (
         <DashboardLayout title="Daily Call Report (DCR)">
@@ -359,6 +372,7 @@ export default function DCR() {
                                 {visibleColumns.includes('specialist') && <th className="px-6 py-3 font-medium">Specialist</th>}
                                 {visibleColumns.includes('location') && <th className="px-6 py-3 font-medium">Location</th>}
                                 {visibleColumns.includes('visited') && <th className="px-6 py-3 font-medium">Visited</th>}
+                                {visibleColumns.includes('visitedAt') && <th className="px-6 py-3 font-medium">Visited Time</th>}
                                 {visibleColumns.includes('actions') && <th className="px-6 py-3 font-medium text-right">Actions</th>}
                             </tr>
                         </thead>
@@ -403,6 +417,11 @@ export default function DCR() {
                                             ) : (
                                                 <span className="text-gray-400">-</span>
                                             )}
+                                        </td>
+                                    )}
+                                    {visibleColumns.includes('visitedAt') && (
+                                        <td className="px-6 py-4 text-gray-500 whitespace-nowrap">
+                                            {visit.visitedAt?.seconds ? new Date(visit.visitedAt.seconds * 1000).toLocaleString() : '-'}
                                         </td>
                                     )}
                                     {visibleColumns.includes('actions') && (
