@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, addDoc, updateDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -346,6 +346,17 @@ export default function DCR() {
         }
     };
 
+    const handleDelete = async (id) => {
+        if (window.confirm("Are you sure you want to delete this visit request?")) {
+            try {
+                await deleteDoc(doc(db, "visits", id));
+            } catch (error) {
+                console.error("Error deleting visit: ", error);
+                alert("Error deleting visit.");
+            }
+        }
+    };
+
     const filteredVisits = visits.filter(visit =>
         (visit.name && visit.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (visit.city && visit.city.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -456,6 +467,14 @@ export default function DCR() {
                                             >
                                                 {userRole === 'admin' ? 'Review' : (visit.status === 'Approved' ? 'Complete' : 'View')}
                                             </button>
+                                            {visit.status !== 'Visited' && (
+                                                <button
+                                                    onClick={() => handleDelete(visit.id)}
+                                                    className="text-red-600 hover:text-red-900 font-medium ml-2"
+                                                >
+                                                    Delete
+                                                </button>
+                                            )}
                                         </td>
                                     )}
                                 </tr>
