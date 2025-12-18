@@ -134,11 +134,11 @@ export default function DCR() {
                 if (!userData) return false;
 
                 // Location Access
-                const hasLocationAccess =
-                    assignedDistricts.includes(record.district) ||
-                    assignedCities.includes(record.city);
+                // Must be in assigned district
+                if (!assignedDistricts.includes(record.district)) return false;
 
-                if (!hasLocationAccess) return false;
+                // If specific cities are assigned, record must be in one of those cities
+                if (assignedCities.length > 0 && !assignedCities.includes(record.city)) return false;
 
                 // Speciality Access
                 if (assignedSpecialities.length > 0) {
@@ -148,6 +148,30 @@ export default function DCR() {
             return true;
         });
     }, [masterRecords, formData.type, userRole, userData]);
+
+    const checkPastVisits = (doctorName) => {
+        if (!doctorName || userRole !== 'user' || editingVisit) return;
+
+        // Find past COMPLETED visits for this doctor
+        const pastVisits = visits.filter(v =>
+            v.name?.toLowerCase() === doctorName.toLowerCase() &&
+            v.status === 'Visited'
+        );
+
+        if (pastVisits.length > 0) {
+            // Sort by visitedAt to find the last one
+            const sorted = [...pastVisits].sort((a, b) =>
+                (b.visitedAt?.seconds || 0) - (a.visitedAt?.seconds || 0)
+            );
+
+            const lastVisit = sorted[0];
+            const lastDate = lastVisit.visitedAt?.seconds
+                ? new Date(lastVisit.visitedAt.seconds * 1000).toLocaleDateString()
+                : 'Unknown';
+
+            alert(`History for ${doctorName}:\nTotal Visits: ${pastVisits.length}\nLast Visit: ${lastDate}`);
+        }
+    };
 
     const handleOpenModal = (visit = null) => {
         if (visit) {
@@ -488,6 +512,7 @@ export default function DCR() {
                                             district: matchedRecord.district || prev.district,
                                             city: matchedRecord.city || prev.city
                                         }));
+                                        checkPastVisits(matchedRecord.name);
                                     }
                                 }}
                                 onFocus={() => setShowSuggestions(true)}
@@ -514,6 +539,7 @@ export default function DCR() {
                                                         city: record.city || prev.city
                                                     }));
                                                     setShowSuggestions(false);
+                                                    checkPastVisits(record.name);
                                                 }}
                                             >
                                                 <div className="font-medium text-gray-900">{record.name}</div>
