@@ -9,8 +9,11 @@ import Modal from '../components/ui/Modal';
 import MultiSelect from '../components/ui/MultiSelect';
 import { PRODUCTS } from '../constants/products';
 
+import { useNavigate } from 'react-router-dom';
+
 export default function UserDashboard() {
     const { currentUser } = useAuth();
+    const navigate = useNavigate();
     const [pendingApprovals, setPendingApprovals] = useState([]);
     const [myTasks, setMyTasks] = useState([]);
     const [visitedCount, setVisitedCount] = useState(0);
@@ -204,7 +207,10 @@ export default function UserDashboard() {
                             {pendingApprovals.filter(p => p.status === 'REJECTED').length}
                         </p>
                     </Card>
-                    <Card className="p-6 bg-white/60 backdrop-blur-lg shadow-lg border-white/50 border-l-4 border-blue-500">
+                    <Card
+                        className="p-6 bg-white/60 backdrop-blur-lg shadow-lg border-white/50 border-l-4 border-blue-500 cursor-pointer hover:shadow-xl transition-all"
+                        onClick={() => navigate('/dcr', { state: { filterStatus: 'Visited' } })}
+                    >
                         <h3 className="text-lg font-semibold text-blue-900">Visited</h3>
                         <p className="text-3xl font-bold text-blue-600 mt-2">
                             {visitedCount}
