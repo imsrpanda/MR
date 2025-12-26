@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "83134588930",
+    "project_id": "mr-app-f59e5",
+    "storage_bucket": "mr-app-f59e5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:83134588930:android:617d3a51e54e371b0fdf1b",
+        "android_client_info": {
+          "package_name": "com.integritas.mrapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJBTTIFThmuYVTjebgzTD8VItp6hKmjdw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

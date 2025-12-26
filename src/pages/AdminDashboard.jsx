@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, deleteDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, deleteDoc, getDoc, getDocs, serverTimestamp } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -8,6 +8,8 @@ import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { SPECIALISTS } from '../constants/specialists';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
+import * as XLSX from 'xlsx';
 
 const APPROVALS_COLS_DEF = [
     { id: 'name', label: 'Name' },
@@ -29,10 +31,14 @@ export default function AdminDashboard() {
     const [stats, setStats] = useState({
         doctors: 0,
         chemists: 0,
-        employees: 0
+        employees: 0,
+        totalVisits: 0
     });
     const [employees, setEmployees] = useState([]);
     const [pendingApprovals, setPendingApprovals] = useState([]);
+    const [userVisitCounts, setUserVisitCounts] = useState([]);
+    const [visitDates, setVisitDates] = useState([]);
+    const [trendPeriod, setTrendPeriod] = useState('day'); // day, week, month, year
     const [loading, setLoading] = useState(true);
 
     // Column Preferences State
@@ -59,6 +65,27 @@ export default function AdminDashboard() {
     // Approval Modal State
     const [isApprovalModalOpen, setIsApprovalModalOpen] = useState(false);
     const [selectedApproval, setSelectedApproval] = useState(null);
+
+    // Import Modal State
+    const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+    const [importFile, setImportFile] = useState(null);
+    const [importData, setImportData] = useState([]);
+    const [importHeaders, setImportHeaders] = useState([]);
+    const [columnMapping, setColumnMapping] = useState({
+        name: '',
+        type: '',
+        speciality: '',
+        city: '',
+        district: '',
+        address: '',
+        phone: '',
+        email: '',
+        category: '',
+        mobile: '',
+        dob: ''
+    });
+    const [importStep, setImportStep] = useState(1); // 1: Upload, 2: Map, 3: Preview
+    const [importing, setImporting] = useState(false);
 
     useEffect(() => {
         localStorage.setItem('admin_approvals_columns', JSON.stringify(approvalsColumns));
@@ -103,6 +130,35 @@ export default function AdminDashboard() {
             setLoading(false);
         });
 
+        // Subscribe to Visits to count completed visits
+        const qVisits = query(collection(db, "visits"), where("status", "==", "Visited"));
+        const unsubscribeVisits = onSnapshot(qVisits, (snapshot) => {
+
+            // Calculate visits per user and store raw dates
+            const counts = {};
+            const dates = [];
+
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                // Count per user
+                if (data.createdBy) {
+                    counts[data.createdBy] = (counts[data.createdBy] || 0) + 1;
+                }
+                // Store date
+                const timestamp = data.visitedAt || data.updatedAt || data.createdAt;
+                if (timestamp) {
+                    dates.push(timestamp.toDate());
+                }
+            });
+
+            setStats(prev => ({
+                ...prev,
+                totalVisits: snapshot.size
+            }));
+            setUserVisitCounts(counts);
+            setVisitDates(dates);
+        });
+
         // Subscribe to Pending Approvals
         const qApprovals = query(collection(db, "pending_approvals"), where("status", "==", "PENDING"));
         const unsubscribeApprovals = onSnapshot(qApprovals, (snapshot) => {
@@ -117,6 +173,7 @@ export default function AdminDashboard() {
             unsubscribeRecords();
             unsubscribeUsers();
             unsubscribeApprovals();
+            unsubscribeVisits();
         };
     }, []);
 
@@ -277,13 +334,319 @@ export default function AdminDashboard() {
         }
     };
 
+    // Helper for Chart Data Aggregation
+    const getTrendData = (dates, period) => {
+        if (!dates.length) return [];
+
+        const now = new Date();
+        const map = new Map();
+
+        // Helper to format date keys
+        const formatDate = (date) => {
+            if (period === 'day') return date.toISOString().split('T')[0];
+            if (period === 'week') {
+                const d = new Date(date);
+                d.setHours(0, 0, 0, 0);
+                d.setDate(d.getDate() - d.getDay() + 1); // Monday
+                return d.toISOString().split('T')[0];
+            }
+            if (period === 'month') return date.toISOString().slice(0, 7); // YYYY-MM
+            if (period === 'year') return date.getFullYear().toString();
+            return date.toISOString().split('T')[0];
+        };
+
+        const formatLabel = (key) => {
+            const date = new Date(key);
+            if (period === 'day') return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            if (period === 'week') return `Wk ${getWeekNumber(date)}`;
+            if (period === 'month') return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+            if (period === 'year') return key;
+            return key;
+        };
+
+        const getWeekNumber = (d) => {
+            d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+            d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+            var yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+            var weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+            return weekNo;
+        }
+
+        // Filter and Fill Data
+        // For simplicity, we just aggregate what we have. 
+        // Filling gaps (0 visits) would be ideal but logic heavy for this snippet.
+
+        // Sort dates asc
+        const sortedDates = [...dates].sort((a, b) => a - b);
+
+        sortedDates.forEach(date => {
+            const key = formatDate(date);
+            map.set(key, (map.get(key) || 0) + 1);
+        });
+
+        // Convert Map to Array
+        return Array.from(map.entries()).map(([key, value]) => ({
+            name: formatLabel(key),
+            visits: value
+        }));
+    };
+
+    // Export Functions
+    const exportToExcel = async (dataType) => {
+        try {
+            let data = [];
+            let fileName = '';
+            let sheetName = '';
+
+            if (dataType === 'master_records') {
+                // Fetch all master records
+                const snapshot = await getDocs(collection(db, "master_records"));
+                const records = snapshot.docs.map(doc => {
+                    const record = doc.data();
+                    return {
+                        'Name': record.name || '',
+                        'Type': record.type || '',
+                        'Speciality': record.speciality || '',
+                        'City': record.city || '',
+                        'District': record.district || '',
+                        'Address': record.address || '',
+                        'Phone': record.phone || '',
+                        'Email': record.email || '',
+                        'Category': record.category || '',
+                        'Mobile': record.mobile || '',
+                        'DOB': record.dob || '',
+                        'Created At': record.createdAt?.toDate().toLocaleDateString() || '',
+                        'Created By': record.createdByEmail || ''
+                    };
+                });
+                createAndDownloadExcel(records, 'Master_Records', 'Records');
+            }
+
+            if (dataType === 'visits') {
+                // Fetch all visits
+                const snapshot = await getDocs(collection(db, "visits"));
+                const visits = snapshot.docs.map(doc => {
+                    const visit = doc.data();
+                    return {
+                        'Doctor/Chemist Name': visit.name || '',
+                        'Type': visit.type || '',
+                        'City': visit.city || '',
+                        'District': visit.district || '',
+                        'Call Type': visit.callType || '',
+                        'Status': visit.status || '',
+                        'Products Promoted': visit.productsPromoted?.join(', ') || '',
+                        'Samples Given': visit.samplesGiven?.join(', ') || '',
+                        'Gifts Given': visit.giftsGiven?.join(', ') || '',
+                        'POB Value': visit.pobValue || '',
+                        'Remarks': visit.remarks || '',
+                        'Visit Date': visit.visitedAt?.toDate().toLocaleDateString() || visit.createdAt?.toDate().toLocaleDateString() || '',
+                        'Created By': visit.createdByEmail || ''
+                    };
+                });
+                createAndDownloadExcel(visits, 'DCR_Visits', 'Visits');
+            }
+
+            if (dataType === 'employees') {
+                // Use existing employees state
+                const employeeData = employees.map(emp => ({
+                    'Name': emp.name || '',
+                    'Email': emp.email || '',
+                    'Districts': emp.assignedDistricts?.join(', ') || '',
+                    'Cities': emp.assignedCities?.join(', ') || '',
+                    'Specialities': emp.assignedSpecialities?.join(', ') || ''
+                }));
+                createAndDownloadExcel(employeeData, 'Employees', 'Employees');
+            }
+
+        } catch (error) {
+            console.error('Export error:', error);
+            alert('Failed to export data. Please try again.');
+        }
+    };
+
+    const createAndDownloadExcel = (data, fileName, sheetName) => {
+        if (!data || data.length === 0) {
+            alert('No data available to export.');
+            return;
+        }
+
+        // Create workbook and worksheet
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(data);
+
+        // Add worksheet to workbook
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+        // Generate file name with timestamp
+        const timestamp = new Date().toISOString().split('T')[0];
+        const fullFileName = `${fileName}_${timestamp}.xlsx`;
+
+        // Save file
+        XLSX.writeFile(wb, fullFileName);
+    };
+
+    // Import Functions
+    const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setImportFile(file);
+        const reader = new FileReader();
+
+        reader.onload = (event) => {
+            try {
+                const binaryStr = event.target.result;
+                const workbook = XLSX.read(binaryStr, { type: 'binary' });
+                const sheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[sheetName];
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                if (jsonData.length < 2) {
+                    alert('File must contain headers and at least one data row.');
+                    return;
+                }
+
+                const headers = jsonData[0];
+                const dataRows = jsonData.slice(1).filter(row => row.some(cell => cell !== null && cell !== ''));
+
+                setImportHeaders(headers);
+                setImportData(dataRows);
+                setImportStep(2); // Move to mapping step
+            } catch (error) {
+                console.error('Error parsing file:', error);
+                alert('Failed to parse file. Please ensure it\'s a valid Excel file.');
+            }
+        };
+
+        reader.readAsBinaryString(file);
+    };
+
+    const handleImport = async () => {
+        if (!importData.length) return;
+
+        // Validate mapping
+        const requiredFields = ['name', 'type', 'city', 'district'];
+        const missingFields = requiredFields.filter(field => !columnMapping[field]);
+
+        if (missingFields.length > 0) {
+            alert(`Please map the following required fields: ${missingFields.join(', ')}`);
+            return;
+        }
+
+        setImporting(true);
+        try {
+            const currentUser = JSON.parse(localStorage.getItem('user'));
+            let successCount = 0;
+            let errorCount = 0;
+
+            for (const row of importData) {
+                try {
+                    const record = {};
+
+                    // Map columns based on user selection
+                    Object.keys(columnMapping).forEach(field => {
+                        const columnIndex = importHeaders.indexOf(columnMapping[field]);
+                        if (columnIndex !== -1 && row[columnIndex]) {
+                            record[field] = String(row[columnIndex]).trim();
+                        }
+                    });
+
+                    // Normalize predefined field values (case-insensitive matching)
+
+                    // Normalize Type field
+                    if (record.type) {
+                        const typeOptions = ['Doctor', 'Chemist'];
+                        const matchedType = typeOptions.find(t =>
+                            t.toLowerCase() === record.type.toLowerCase()
+                        );
+                        if (matchedType) {
+                            record.type = matchedType;
+                        }
+                    }
+
+                    // Normalize Speciality field
+                    if (record.speciality) {
+                        const matchedSpeciality = SPECIALISTS.find(s =>
+                            s.toLowerCase() === record.speciality.toLowerCase()
+                        );
+                        if (matchedSpeciality) {
+                            record.speciality = matchedSpeciality;
+                        }
+                    }
+
+                    // Normalize Category field
+                    if (record.category) {
+                        const categoryOptions = ['visit', 'invest', 'gift', 'others'];
+                        const matchedCategory = categoryOptions.find(c =>
+                            c.toLowerCase() === record.category.toLowerCase()
+                        );
+                        if (matchedCategory) {
+                            record.category = matchedCategory;
+                        } else {
+                            record.category = 'visit'; // default
+                        }
+                    } else {
+                        record.category = 'visit'; // default if not provided
+                    }
+
+                    // Add metadata
+                    record.createdAt = serverTimestamp();
+                    record.createdBy = currentUser?.uid || 'admin';
+                    record.createdByEmail = currentUser?.email || 'admin';
+
+                    // Validate required fields
+                    if (record.name && record.type && record.city && record.district) {
+                        await addDoc(collection(db, 'master_records'), record);
+                        successCount++;
+                    } else {
+                        errorCount++;
+                    }
+                } catch (error) {
+                    console.error('Error importing row:', error);
+                    errorCount++;
+                }
+            }
+
+            alert(`Import complete!\nSuccess: ${successCount}\nFailed: ${errorCount}`);
+
+            // Reset and close
+            setIsImportModalOpen(false);
+            resetImportState();
+        } catch (error) {
+            console.error('Import error:', error);
+            alert('Failed to import data. Please try again.');
+        } finally {
+            setImporting(false);
+        }
+    };
+
+    const resetImportState = () => {
+        setImportFile(null);
+        setImportData([]);
+        setImportHeaders([]);
+        setColumnMapping({
+            name: '',
+            type: '',
+            speciality: '',
+            city: '',
+            district: '',
+            address: '',
+            phone: '',
+            email: '',
+            category: '',
+            mobile: '',
+            dob: ''
+        });
+        setImportStep(1);
+    };
+
     return (
         <DashboardLayout
             title="Admin Dashboard"
             backgroundClass="bg-gradient-to-br from-blue-100 via-indigo-100 to-purple-100"
         >
             {/* Analytics Cards */}
-            <div className="grid gap-4 md:grid-cols-3 mb-6">
+            <div className="grid gap-4 md:grid-cols-4 mb-6">
                 <Card className="p-4 border-l-4 border-indigo-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
                     <div className="flex items-center justify-between">
                         <div>
@@ -325,7 +688,169 @@ export default function AdminDashboard() {
                         </div>
                     </div>
                 </Card>
+
+                <Card className="p-4 border-l-4 border-blue-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Visits</h3>
+                            <p className="text-2xl font-bold text-gray-900 mt-1">
+                                {loading ? '...' : stats.totalVisits}
+                            </p>
+                        </div>
+                        <div className="p-2 bg-blue-50 rounded-full">
+                            <span className="text-xl">✅</span>
+                        </div>
+                    </div>
+                </Card>
             </div>
+
+            {/* Import/Export Data Section */}
+            <Card className="p-6 mb-8 bg-white/60 backdrop-blur-lg shadow-lg border-white/50 border-l-4 border-green-500">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
+                    <div>
+                        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                            <span className="text-2xl">📊</span>
+                            Import / Export Data
+                        </h3>
+                        <p className="text-sm text-gray-500 mt-1">Upload or download records in Excel format</p>
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* Import Button */}
+                    <button
+                        onClick={() => setIsImportModalOpen(true)}
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                    >
+                        <span className="text-xl">📤</span>
+                        <span>Import Master Records</span>
+                    </button>
+
+                    {/* Export Buttons */}
+                    <button
+                        onClick={() => exportToExcel('master_records')}
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                    >
+                        <span className="text-xl">📋</span>
+                        <span>Export Master Records</span>
+                    </button>
+                    <button
+                        onClick={() => exportToExcel('visits')}
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg hover:from-purple-600 hover:to-purple-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                    >
+                        <span className="text-xl">📝</span>
+                        <span>Export DCR / Visits</span>
+                    </button>
+                    <button
+                        onClick={() => exportToExcel('employees')}
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg hover:from-indigo-600 hover:to-indigo-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                    >
+                        <span className="text-xl">👥</span>
+                        <span>Export Employees</span>
+                    </button>
+                </div>
+            </Card>
+
+            {/* Visit Trends Chart */}
+            <Card className="p-6 mb-8 bg-white/60 backdrop-blur-lg shadow-lg border-white/50 border-l-4 border-indigo-500">
+                <div className="flex flex-col sm:flex-row justify-between items-center mb-6">
+                    <div>
+                        <h3 className="text-lg font-semibold text-gray-900">Visit Trends</h3>
+                        <p className="text-sm text-gray-500">Visualizing completed visits over time.</p>
+                    </div>
+                    <div className="flex space-x-2 mt-4 sm:mt-0">
+                        {['day', 'week', 'month', 'year'].map((period) => (
+                            <button
+                                key={period}
+                                onClick={() => setTrendPeriod(period)}
+                                className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${trendPeriod === period
+                                    ? 'bg-indigo-600 text-white shadow-md'
+                                    : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+                                    }`}
+                            >
+                                {period.charAt(0).toUpperCase() + period.slice(1)}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="h-[300px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={getTrendData(visitDates, trendPeriod)}>
+                            <defs>
+                                <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                            <XAxis
+                                dataKey="name"
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: '#6b7280', fontSize: 12 }}
+                                dy={10}
+                            />
+                            <YAxis
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: '#6b7280', fontSize: 12 }}
+                            />
+                            <Tooltip
+                                contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', border: 'none' }}
+                                itemStyle={{ color: '#4f46e5' }}
+                            />
+                            <Area
+                                type="monotone"
+                                dataKey="visits"
+                                stroke="#6366f1"
+                                strokeWidth={3}
+                                fillOpacity={1}
+                                fill="url(#colorVisits)"
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </div>
+            </Card>
+
+            {/* Visits by User Widget */}
+            {userVisitCounts && Object.keys(userVisitCounts).length > 0 && (
+                <Card className="p-0 overflow-hidden flex flex-col mb-8 border-l-4 border-blue-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
+                    <div className="p-6 border-b border-gray-100/50 flex justify-between items-center">
+                        <h3 className="text-lg font-semibold text-gray-900">Visits by User</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-gray-50/50 text-gray-500 uppercase">
+                                <tr>
+                                    <th className="px-6 py-3 font-medium">Employee Name</th>
+                                    <th className="px-6 py-3 font-medium">Email</th>
+                                    <th className="px-6 py-3 font-medium text-right">Completed Visits</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {Object.entries(userVisitCounts)
+                                    .map(([uid, count]) => {
+                                        const employee = employees.find(e => e.id === uid);
+                                        return {
+                                            id: uid,
+                                            name: employee?.name || 'Unknown User',
+                                            email: employee?.email || '-',
+                                            count: count
+                                        };
+                                    })
+                                    .sort((a, b) => b.count - a.count)
+                                    .map((user) => (
+                                        <tr key={user.id} className="hover:bg-white/40">
+                                            <td className="px-6 py-4 font-medium text-gray-900">{user.name}</td>
+                                            <td className="px-6 py-4 text-gray-500">{user.email}</td>
+                                            <td className="px-6 py-4 text-right font-bold text-blue-600">{user.count}</td>
+                                        </tr>
+                                    ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </Card>
+            )}
 
             {/* Pending Approvals Section */}
             {pendingApprovals.length > 0 && (
@@ -693,6 +1218,181 @@ export default function AdminDashboard() {
                         </div>
                     </div>
                 )}
+            </Modal>
+
+            {/* Import Modal */}
+            <Modal
+                isOpen={isImportModalOpen}
+                onClose={() => {
+                    setIsImportModalOpen(false);
+                    resetImportState();
+                }}
+                title="Import Master Records"
+            >
+                <div className="space-y-6">
+                    {/* Step Indicator */}
+                    <div className="flex items-center justify-between mb-6">
+                        {[1, 2, 3].map((step) => (
+                            <div key={step} className="flex items-center flex-1">
+                                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-semibold ${importStep >= step ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
+                                    }`}>
+                                    {step}
+                                </div>
+                                {step < 3 && <div className={`flex-1 h-1 mx-2 ${importStep > step ? 'bg-green-500' : 'bg-gray-200'}`} />}
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Step 1: Upload File */}
+                    {importStep === 1 && (
+                        <div className="space-y-4">
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                                <h4 className="font-semibold text-blue-900 mb-2">📝 Instructions:</h4>
+                                <ul className="list-disc list-inside text-sm text-blue-800 space-y-1">
+                                    <li>Upload an Excel file (.xlsx or .xls)</li>
+                                    <li>First row should contain column headers</li>
+                                    <li>Required fields: Name, Type, City, District</li>
+                                    <li>Optional fields: Speciality, Address, Phone, Email</li>
+                                </ul>
+                            </div>
+
+                            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-green-500 transition-colors">
+                                <input
+                                    type="file"
+                                    accept=".xlsx,.xls"
+                                    onChange={handleFileUpload}
+                                    className="hidden"
+                                    id="file-upload"
+                                />
+                                <label
+                                    htmlFor="file-upload"
+                                    className="cursor-pointer flex flex-col items-center"
+                                >
+                                    <span className="text-6xl mb-4">📁</span>
+                                    <span className="text-lg font-semibold text-gray-700 mb-2">
+                                        {importFile ? importFile.name : 'Click to upload Excel file'}
+                                    </span>
+                                    <span className="text-sm text-gray-500">
+                                        Supported formats: .xlsx, .xls
+                                    </span>
+                                </label>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Step 2: Map Columns */}
+                    {importStep === 2 && (
+                        <div className="space-y-4">
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                                <h4 className="font-semibold text-yellow-900 mb-2">🔗 Map Your Columns:</h4>
+                                <p className="text-sm text-yellow-800">
+                                    Match your Excel columns to the database fields. Fields marked with * are required.
+                                </p>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-96 overflow-y-auto">
+                                {Object.keys(columnMapping).map((field) => (
+                                    <div key={field}>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            {field.charAt(0).toUpperCase() + field.slice(1)}
+                                            {['name', 'type', 'city', 'district'].includes(field) && <span className="text-red-500"> *</span>}
+                                        </label>
+                                        <select
+                                            value={columnMapping[field]}
+                                            onChange={(e) => setColumnMapping({ ...columnMapping, [field]: e.target.value })}
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                        >
+                                            <option value="">-- Select Column --</option>
+                                            {importHeaders.map((header, idx) => (
+                                                <option key={idx} value={header}>
+                                                    {header}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="flex gap-2 mt-6">
+                                <Button
+                                    onClick={() => setImportStep(1)}
+                                    variant="secondary"
+                                    className="flex-1"
+                                >
+                                    ← Back
+                                </Button>
+                                <Button
+                                    onClick={() => setImportStep(3)}
+                                    className="flex-1 bg-green-600 hover:bg-green-700"
+                                >
+                                    Next: Preview →
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Step 3: Preview & Import */}
+                    {importStep === 3 && (
+                        <div className="space-y-4">
+                            <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
+                                <h4 className="font-semibold text-green-900 mb-2">✅ Ready to Import:</h4>
+                                <p className="text-sm text-green-800">
+                                    Found {importData.length} records. Review the preview below and click Import to proceed.
+                                </p>
+                            </div>
+
+                            <div className="border border-gray-200 rounded-lg overflow-hidden max-h-96 overflow-y-auto">
+                                <table className="min-w-full divide-y divide-gray-200 text-sm">
+                                    <thead className="bg-gray-50 sticky top-0">
+                                        <tr>
+                                            {Object.keys(columnMapping).filter(k => columnMapping[k]).map((field) => (
+                                                <th key={field} className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                                                    {field}
+                                                </th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {importData.slice(0, 10).map((row, idx) => (
+                                            <tr key={idx} className="hover:bg-gray-50">
+                                                {Object.keys(columnMapping).filter(k => columnMapping[k]).map((field) => {
+                                                    const colIndex = importHeaders.indexOf(columnMapping[field]);
+                                                    return (
+                                                        <td key={field} className="px-3 py-2 whitespace-nowrap text-gray-900">
+                                                            {row[colIndex] || '-'}
+                                                        </td>
+                                                    );
+                                                })}
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            {importData.length > 10 && (
+                                <p className="text-xs text-gray-500 text-center">
+                                    Showing first 10 of {importData.length} records
+                                </p>
+                            )}
+
+                            <div className="flex gap-2 mt-6">
+                                <Button
+                                    onClick={() => setImportStep(2)}
+                                    variant="secondary"
+                                    className="flex-1"
+                                >
+                                    ← Back to Mapping
+                                </Button>
+                                <Button
+                                    onClick={handleImport}
+                                    disabled={importing}
+                                    className="flex-1 bg-green-600 hover:bg-green-700 disabled:opacity-50"
+                                >
+                                    {importing ? 'Importing...' : `Import ${importData.length} Records`}
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </Modal>
         </DashboardLayout>
     );

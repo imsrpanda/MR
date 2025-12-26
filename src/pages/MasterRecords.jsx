@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc, onSnapshot, query, orderBy, serverTimestamp, where } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, onSnapshot, query, orderBy, serverTimestamp, where } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -51,7 +51,10 @@ export default function MasterRecords() {
         district: '',
         city: '',
         visited: false,
-        productShown: ''
+        productShown: '',
+        category: 'visit',
+        mobile: '',
+        dob: ''
     };
     const [formData, setFormData] = useState(initialFormState);
 
@@ -293,6 +296,26 @@ export default function MasterRecords() {
         setLoading(true);
 
         try {
+            // Check for duplicate names when adding new records (not when editing)
+            if (!editingRecord && formData.name) {
+                const duplicateQuery = query(
+                    collection(db, "master_records"),
+                    where("name", "==", formData.name.trim())
+                );
+                const duplicateSnapshot = await getDocs(duplicateQuery);
+
+                if (!duplicateSnapshot.empty) {
+                    const confirmAdd = window.confirm(
+                        `A record with the name "${formData.name}" already exists.\n\nDo you really want to add a new record with the same name?`
+                    );
+
+                    if (!confirmAdd) {
+                        setLoading(false);
+                        return; // User cancelled
+                    }
+                }
+            }
+
             const dataToSave = {
                 ...formData
             };
@@ -412,12 +435,11 @@ export default function MasterRecords() {
             const assignedCities = userData?.assignedCities || [];
             const assignedSpecialities = userData?.assignedSpecialities || [];
 
-            // 1. Location Check: Must be in one of the assigned districts OR assigned cities
-            const hasLocationAccess =
-                assignedDistricts.includes(record.district) ||
-                assignedCities.includes(record.city);
+            // 1. Location Check: Must be in one of the assigned districts
+            if (!assignedDistricts.includes(record.district)) return false;
 
-            if (!hasLocationAccess) return false;
+            // If specific cities are assigned, record must be in one of those cities
+            if (assignedCities.length > 0 && !assignedCities.includes(record.city)) return false;
 
             // 2. Speciality Check: If specialities are assigned, record must match
             if (assignedSpecialities.length > 0) {
@@ -656,6 +678,41 @@ export default function MasterRecords() {
                             value={formData.productShown ? formData.productShown.split(',').map(p => p.trim()).filter(p => p) : []}
                             onChange={(newVal) => setFormData({ ...formData, productShown: newVal.join(', ') })}
                             placeholder="Select products..."
+                        />
+                    </div>
+
+                    {/* Category Dropdown */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                        <select
+                            value={formData.category}
+                            onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                        >
+                            <option value="visit">Visit</option>
+                            <option value="invest">Invest</option>
+                            <option value="gift">Gift</option>
+                            <option value="others">Others</option>
+                        </select>
+                    </div>
+
+                    {/* Mobile Field */}
+                    <Input
+                        label="Mobile (Optional)"
+                        value={formData.mobile}
+                        onChange={(e) => setFormData({ ...formData, mobile: e.target.value })}
+                        placeholder="e.g. 9876543210"
+                        type="tel"
+                    />
+
+                    {/* DOB Field */}
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth (Optional)</label>
+                        <input
+                            type="date"
+                            value={formData.dob}
+                            onChange={(e) => setFormData({ ...formData, dob: e.target.value })}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
                         />
                     </div>
 
