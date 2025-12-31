@@ -4,7 +4,17 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>mr</title>
+    <title>Integritas MR</title>
+    <script type="text/javascript">
+      (function() {
+        if (window.location.pathname !== '/mr/' && window.location.pathname !== '/mr/index.html') {
+          const redirectPath = window.location.pathname.replace('/mr/', '');
+          if (redirectPath) {
+            window.history.replaceState(null, null, '/mr/#' + redirectPath + window.location.search);
+          }
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
