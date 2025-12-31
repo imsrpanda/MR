@@ -75,7 +75,7 @@ function AppRoutes() {
 
 function App() {
   return (
-    <Router>
+    <Router basename={import.meta.env.PROD ? '/mr' : '/'}>
       <AuthProvider>
         <AppRoutes />
       </AuthProvider>
