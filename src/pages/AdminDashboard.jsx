@@ -6,6 +6,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
+import DoctorVisitWidget from '../components/widgets/DoctorVisitWidget';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { SPECIALISTS } from '../constants/specialists';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
@@ -423,24 +424,35 @@ export default function AdminDashboard() {
             }
 
             if (dataType === 'visits') {
-                // Fetch all visits
-                const snapshot = await getDocs(collection(db, "visits"));
-                const visits = snapshot.docs.map(doc => {
+                // Fetch all visits and master records for mapping
+                const visitsSnapshot = await getDocs(collection(db, "visits"));
+                const masterSnapshot = await getDocs(collection(db, "master_records"));
+                
+                // Create a map of master records by name for quick lookup
+                const masterRecordsMap = {};
+                masterSnapshot.docs.forEach(doc => {
+                    const record = doc.data();
+                    masterRecordsMap[record.name] = record;
+                });
+                
+                const visits = visitsSnapshot.docs.map(doc => {
                     const visit = doc.data();
+                    const masterRecord = masterRecordsMap[visit.name];
+                    
                     return {
                         'Doctor/Chemist Name': visit.name || '',
                         'Type': visit.type || '',
                         'City': visit.city || '',
                         'District': visit.district || '',
-                        'Call Type': visit.callType || '',
+                        'Call Type': masterRecord?.category || '',
                         'Status': visit.status || '',
-                        'Products Promoted': visit.productsPromoted?.join(', ') || '',
+                        'Products Promoted': visit.productShown || '',
                         'Samples Given': visit.samplesGiven?.join(', ') || '',
                         'Gifts Given': visit.giftsGiven?.join(', ') || '',
                         'POB Value': visit.pobValue || '',
                         'Remarks': visit.remarks || '',
                         'Visit Date': visit.visitedAt?.toDate().toLocaleDateString() || visit.createdAt?.toDate().toLocaleDateString() || '',
-                        'Created By': visit.createdByEmail || ''
+                        'Created By': visit.createdByName || ''
                     };
                 });
                 createAndDownloadExcel(visits, 'DCR_Visits', 'Visits');
@@ -811,6 +823,9 @@ export default function AdminDashboard() {
                     </ResponsiveContainer>
                 </div>
             </Card>
+
+            {/* Doctor Visit Widget */}
+            <DoctorVisitWidget />
 
             {/* Visits by User Widget */}
             {userVisitCounts && Object.keys(userVisitCounts).length > 0 && (

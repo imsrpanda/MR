@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { db } from '../firebase/firebase';
 import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore';
@@ -21,6 +21,7 @@ const DCR_COLS_DEF = [
     { id: 'name', label: 'Name' },
     { id: 'specialist', label: 'Specialist' },
     { id: 'location', label: 'Location' },
+    { id: 'createdBy', label: 'Created By' },
     { id: 'visited', label: 'Visited' },
     { id: 'visitedAt', label: 'Visited Time' },
     { id: 'actions', label: 'Actions' }
@@ -34,12 +35,17 @@ export default function DCR() {
     const [masterRecords, setMasterRecords] = useState([]);
     const [dcrCities, setDcrCities] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
+    const [allUsers, setAllUsers] = useState([]);
 
     // Date Filter State
     const [dateFilter, setDateFilter] = useState('Today');
     const [customStartDate, setCustomStartDate] = useState('');
     const [customEndDate, setCustomEndDate] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
+    const [userFilter, setUserFilter] = useState('All');
+
+    // Print Ref
+    const printRef = useRef(null);
 
     // Handle Navigation State from Dashboard
     const location = useLocation();
@@ -57,7 +63,7 @@ export default function DCR() {
     // Column Preferences State
     const [visibleColumns, setVisibleColumns] = useState(() => {
         const saved = localStorage.getItem('dcr_columns');
-        return saved ? JSON.parse(saved) : ['createdDate', 'name', 'status', 'actions'];
+        return saved ? JSON.parse(saved) : ['createdDate', 'name', 'createdBy', 'status', 'actions'];
     });
 
     useEffect(() => {
@@ -142,6 +148,23 @@ export default function DCR() {
         });
         return () => unsubscribe();
     }, []);
+
+    // Subscribe to Users (only for admin)
+    useEffect(() => {
+        if (userRole !== 'admin') return;
+        
+        const qUsers = query(collection(db, "users"), where("role", "==", "user"));
+        const unsubscribe = onSnapshot(qUsers, (snapshot) => {
+            const users = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            })).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+            setAllUsers(users);
+        }, (error) => {
+            console.error("Error fetching users:", error);
+        });
+        return () => unsubscribe();
+    }, [userRole]);
 
     // Filter Master Records for Auto-complete
     const filteredMasterOptions = useMemo(() => {
@@ -389,6 +412,124 @@ export default function DCR() {
         }
     };
 
+    const handlePrint = () => {
+        if (!printRef.current) return;
+
+        const printWindow = window.open('', '_blank');
+        const printContent = printRef.current.innerHTML;
+
+        printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>DCR Report</title>
+                <style>
+                    body {
+                        font-family: 'Arial', sans-serif;
+                        margin: 20px;
+                        color: #333;
+                    }
+                    h1 {
+                        text-align: center;
+                        color: #1f2937;
+                        margin-bottom: 10px;
+                        font-size: 24px;
+                    }
+                    .report-info {
+                        text-align: center;
+                        color: #666;
+                        margin-bottom: 20px;
+                        font-size: 12px;
+                    }
+                    table {
+                        width: 100%;
+                        border-collapse: collapse;
+                        margin-top: 20px;
+                        font-size: 12px;
+                    }
+                    th {
+                        background-color: #f3f4f6;
+                        padding: 10px;
+                        text-align: left;
+                        font-weight: 600;
+                        border-bottom: 2px solid #d1d5db;
+                        font-size: 11px;
+                        text-transform: uppercase;
+                    }
+                    td {
+                        padding: 10px;
+                        border-bottom: 1px solid #e5e7eb;
+                    }
+                    tr:last-child td {
+                        border-bottom: 2px solid #d1d5db;
+                    }
+                    .status-pending {
+                        background-color: #fef3c7;
+                        color: #92400e;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                        font-size: 10px;
+                        font-weight: 600;
+                    }
+                    .status-approved {
+                        background-color: #d1fae5;
+                        color: #065f46;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                        font-size: 10px;
+                        font-weight: 600;
+                    }
+                    .status-rejected {
+                        background-color: #fee2e2;
+                        color: #991b1b;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                        font-size: 10px;
+                        font-weight: 600;
+                    }
+                    .status-visited {
+                        background-color: #dbeafe;
+                        color: #1e40af;
+                        padding: 4px 8px;
+                        border-radius: 4px;
+                        font-size: 10px;
+                        font-weight: 600;
+                    }
+                    .footer {
+                        text-align: center;
+                        margin-top: 30px;
+                        color: #999;
+                        font-size: 11px;
+                        border-top: 1px solid #e5e7eb;
+                        padding-top: 15px;
+                    }
+                    @media print {
+                        body {
+                            margin: 0;
+                            padding: 10mm;
+                        }
+                    }
+                </style>
+            </head>
+            <body>
+                <h1>📋 Daily Call Report (DCR)</h1>
+                <div class="report-info">
+                    Generated on ${new Date().toLocaleString()}
+                </div>
+                ${printContent}
+                <div class="footer">
+                    <p>This is an auto-generated report from Integritas MR System</p>
+                </div>
+            </body>
+            </html>
+        `);
+
+        printWindow.document.close();
+        setTimeout(() => {
+            printWindow.print();
+        }, 250);
+    };
+
     const filteredVisits = visits.filter(visit => {
         // 1. Text Search
         const matchesSearch = (
@@ -401,7 +542,10 @@ export default function DCR() {
         // 2. Status Filter
         if (statusFilter !== 'All' && visit.status !== statusFilter) return false;
 
-        // 3. Date Filter
+        // 3. User Filter (for admin only)
+        if (userRole === 'admin' && userFilter !== 'All' && visit.createdBy !== userFilter) return false;
+
+        // 4. Date Filter
         if (dateFilter === 'All') return true;
 
         if (!visit.createdAt) return false;
@@ -489,6 +633,25 @@ export default function DCR() {
                             <option value="Rejected">Rejected</option>
                             <option value="Visited">Visited</option>
                         </select>
+
+                        {userRole === 'admin' && (
+                            <>
+                                <div className="h-6 w-px bg-gray-300 mx-2 hidden sm:block"></div>
+                                <span className="text-sm font-medium text-gray-700 mr-1">User:</span>
+                                <select
+                                    value={userFilter}
+                                    onChange={(e) => setUserFilter(e.target.value)}
+                                    className="px-2 py-1.5 text-xs font-medium rounded-md border border-gray-300 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                >
+                                    <option value="All">All Users</option>
+                                    {allUsers.map(user => (
+                                        <option key={user.id} value={user.id}>
+                                            {user.name || user.email}
+                                        </option>
+                                    ))}
+                                </select>
+                            </>
+                        )}
                     </div>
 
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -502,6 +665,14 @@ export default function DCR() {
                             />
                         </div>
                         <div className="flex items-center gap-2">
+                            <button
+                                onClick={handlePrint}
+                                className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white rounded-lg font-medium transition-all duration-200 shadow-md hover:shadow-lg text-sm"
+                                title="Print DCR Report"
+                            >
+                                <span className="text-lg">🖨️</span>
+                                <span className="hidden sm:inline">Print</span>
+                            </button>
                             <ColumnToggle
                                 columns={DCR_COLS_DEF}
                                 visibleColumns={visibleColumns}
@@ -517,7 +688,7 @@ export default function DCR() {
                 </div>
 
                 {/* Table */}
-                <div className="overflow-x-auto flex-1">
+                <div className="overflow-x-auto flex-1" ref={printRef}>
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-50 text-gray-500 uppercase">
                             <tr>
@@ -527,6 +698,7 @@ export default function DCR() {
                                 {visibleColumns.includes('name') && <th className="px-6 py-3 font-medium">Name</th>}
                                 {visibleColumns.includes('specialist') && <th className="px-6 py-3 font-medium">Specialist</th>}
                                 {visibleColumns.includes('location') && <th className="px-6 py-3 font-medium">Location</th>}
+                                {visibleColumns.includes('createdBy') && <th className="px-6 py-3 font-medium">Created By</th>}
                                 {visibleColumns.includes('visited') && <th className="px-6 py-3 font-medium">Visited</th>}
                                 {visibleColumns.includes('visitedAt') && <th className="px-6 py-3 font-medium">Visited Time</th>}
                                 {visibleColumns.includes('actions') && <th className="px-6 py-3 font-medium text-right">Actions</th>}
@@ -564,6 +736,11 @@ export default function DCR() {
                                                 <span>{visit.city}</span>
                                                 <span className="text-xs text-gray-400">{visit.district}</span>
                                             </div>
+                                        </td>
+                                    )}
+                                    {visibleColumns.includes('createdBy') && (
+                                        <td className="px-6 py-4 text-gray-900 font-medium">
+                                            {visit.createdByName || 'Unknown'}
                                         </td>
                                     )}
                                     {visibleColumns.includes('visited') && (
