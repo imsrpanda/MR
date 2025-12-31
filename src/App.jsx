@@ -1,5 +1,5 @@
 import React from 'react';
-import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
@@ -75,7 +75,7 @@ function AppRoutes() {
 
 function App() {
   return (
-    <Router>
+    <Router basename="/mr">
       <AuthProvider>
         <AppRoutes />
       </AuthProvider>
