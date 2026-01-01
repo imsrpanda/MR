@@ -16,6 +16,7 @@ import { SPECIALISTS } from '../constants/specialists';
 
 const DCR_COLS_DEF = [
     { id: 'createdDate', label: 'Date' },
+    { id: 'createdByName', label: 'Created By' },
     { id: 'status', label: 'Status' },
     { id: 'type', label: 'Type' },
     { id: 'name', label: 'Name' },
@@ -40,6 +41,8 @@ export default function DCR() {
     const [customStartDate, setCustomStartDate] = useState('');
     const [customEndDate, setCustomEndDate] = useState('');
     const [statusFilter, setStatusFilter] = useState('All');
+    const [userFilter, setUserFilter] = useState('All');
+    const [users, setUsers] = useState([]);
 
     // Handle Navigation State from Dashboard
     const location = useLocation();
@@ -57,7 +60,7 @@ export default function DCR() {
     // Column Preferences State
     const [visibleColumns, setVisibleColumns] = useState(() => {
         const saved = localStorage.getItem('dcr_columns');
-        return saved ? JSON.parse(saved) : ['createdDate', 'name', 'status', 'actions'];
+        return saved ? JSON.parse(saved) : ['createdDate', 'createdByName', 'name', 'status', 'actions'];
     });
 
     useEffect(() => {
@@ -142,6 +145,22 @@ export default function DCR() {
         });
         return () => unsubscribe();
     }, []);
+
+    // Subscribe to Users for filter (Admin only)
+    useEffect(() => {
+        if (userRole !== 'admin') return;
+        const q = query(collection(db, "users"), where("role", "==", "user"), orderBy("name"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const data = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setUsers(data);
+        }, (error) => {
+            console.error("Error fetching users for filter:", error);
+        });
+        return () => unsubscribe();
+    }, [userRole]);
 
     // Filter Master Records for Auto-complete
     const filteredMasterOptions = useMemo(() => {
@@ -389,6 +408,71 @@ export default function DCR() {
         }
     };
 
+    const handlePrint = () => {
+        const printWindow = window.open('', '_blank');
+        const tableRows = filteredVisits.map(visit => `
+            <tr>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${visit.createdAt?.seconds ? new Date(visit.createdAt.seconds * 1000).toLocaleDateString() : '-'}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${visit.createdByName || 'Unknown'}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${visit.status}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${visit.type}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${visit.name}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${visit.specialist || '-'}</td>
+                <td style="padding: 10px; border-bottom: 1px solid #eee;">${visit.city}, ${visit.district}</td>
+            </tr>
+        `).join('');
+
+        const html = `
+            <html>
+                <head>
+                    <title>Daily Call Report (DCR)</title>
+                    <style>
+                        body { font-family: sans-serif; padding: 20px; color: #333; }
+                        h1 { color: #4f46e5; font-size: 24px; margin-bottom: 10px; }
+                        .meta { margin-bottom: 20px; font-size: 14px; color: #666; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
+                        th { text-align: left; padding: 10px; background: #f8fafc; border-bottom: 2px solid #e2e8f0; font-weight: 600; }
+                        .footer { margin-top: 30px; font-size: 10px; color: #94a3b8; text-align: center; border-top: 1px solid #eee; padding-top: 10px; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Daily Call Report (DCR)</h1>
+                    <div class="meta">
+                        Generated on: ${new Date().toLocaleString()}<br/>
+                        Filters: ${dateFilter} | Status: ${statusFilter} ${userRole === 'admin' ? `| User: ${userFilter === 'All' ? 'All' : (users.find(u => u.id === userFilter)?.name || userFilter)}` : ''}
+                    </div>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Created By</th>
+                                <th>Status</th>
+                                <th>Type</th>
+                                <th>Name</th>
+                                <th>Specialist</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${tableRows}
+                        </tbody>
+                    </table>
+                    <div class="footer">
+                        Generated by MR Administration System
+                    </div>
+                </body>
+            </html>
+        `;
+
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => {
+            printWindow.print();
+            printWindow.close();
+        }, 500);
+    };
+
     const filteredVisits = visits.filter(visit => {
         // 1. Text Search
         const matchesSearch = (
@@ -400,6 +484,9 @@ export default function DCR() {
 
         // 2. Status Filter
         if (statusFilter !== 'All' && visit.status !== statusFilter) return false;
+
+        // 2b. User Filter (Admin only)
+        if (userRole === 'admin' && userFilter !== 'All' && visit.createdBy !== userFilter) return false;
 
         // 3. Date Filter
         if (dateFilter === 'All') return true;
@@ -489,6 +576,23 @@ export default function DCR() {
                             <option value="Rejected">Rejected</option>
                             <option value="Visited">Visited</option>
                         </select>
+
+                        {userRole === 'admin' && (
+                            <>
+                                <div className="h-6 w-px bg-gray-300 mx-2 hidden sm:block"></div>
+                                <span className="text-sm font-medium text-gray-700 mr-1">User:</span>
+                                <select
+                                    value={userFilter}
+                                    onChange={(e) => setUserFilter(e.target.value)}
+                                    className="px-2 py-1.5 text-xs font-medium rounded-md border border-gray-300 bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                >
+                                    <option value="All">All Users</option>
+                                    {users.map(u => (
+                                        <option key={u.id} value={u.id}>{u.name || u.email}</option>
+                                    ))}
+                                </select>
+                            </>
+                        )}
                     </div>
 
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -502,6 +606,13 @@ export default function DCR() {
                             />
                         </div>
                         <div className="flex items-center gap-2">
+                            <button
+                                onClick={handlePrint}
+                                className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium shadow-sm"
+                            >
+                                <span>🖨️</span>
+                                <span className="hidden sm:inline">Print List</span>
+                            </button>
                             <ColumnToggle
                                 columns={DCR_COLS_DEF}
                                 visibleColumns={visibleColumns}
@@ -522,6 +633,7 @@ export default function DCR() {
                         <thead className="bg-gray-50 text-gray-500 uppercase">
                             <tr>
                                 {visibleColumns.includes('createdDate') && <th className="px-6 py-3 font-medium">Date</th>}
+                                {visibleColumns.includes('createdByName') && <th className="px-6 py-3 font-medium">Created By</th>}
                                 {visibleColumns.includes('status') && <th className="px-6 py-3 font-medium">Status</th>}
                                 {visibleColumns.includes('type') && <th className="px-6 py-3 font-medium">Type</th>}
                                 {visibleColumns.includes('name') && <th className="px-6 py-3 font-medium">Name</th>}
@@ -538,6 +650,11 @@ export default function DCR() {
                                     {visibleColumns.includes('createdDate') && (
                                         <td className="px-6 py-4 text-gray-500 whitespace-nowrap">
                                             {visit.createdAt?.seconds ? new Date(visit.createdAt.seconds * 1000).toLocaleDateString() : '-'}
+                                        </td>
+                                    )}
+                                    {visibleColumns.includes('createdByName') && (
+                                        <td className="px-6 py-4 text-gray-500 font-medium">
+                                            {visit.createdByName || 'Unknown'}
                                         </td>
                                     )}
                                     {visibleColumns.includes('status') && (

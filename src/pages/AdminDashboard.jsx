@@ -37,6 +37,8 @@ export default function AdminDashboard() {
     const [employees, setEmployees] = useState([]);
     const [pendingApprovals, setPendingApprovals] = useState([]);
     const [userVisitCounts, setUserVisitCounts] = useState([]);
+    const [doctorVisitCounts, setDoctorVisitCounts] = useState([]);
+    const [doctorLimit, setDoctorLimit] = useState(10);
     const [visitDates, setVisitDates] = useState([]);
     const [trendPeriod, setTrendPeriod] = useState('day'); // day, week, month, year
     const [loading, setLoading] = useState(true);
@@ -136,6 +138,7 @@ export default function AdminDashboard() {
 
             // Calculate visits per user and store raw dates
             const counts = {};
+            const doctorCountsMap = {};
             const dates = [];
 
             snapshot.docs.forEach(doc => {
@@ -144,6 +147,12 @@ export default function AdminDashboard() {
                 if (data.createdBy) {
                     counts[data.createdBy] = (counts[data.createdBy] || 0) + 1;
                 }
+
+                // Count per doctor
+                if (data.type === 'Doctor' && data.name) {
+                    doctorCountsMap[data.name] = (doctorCountsMap[data.name] || 0) + 1;
+                }
+
                 // Store date
                 const timestamp = data.visitedAt || data.updatedAt || data.createdAt;
                 if (timestamp) {
@@ -151,11 +160,16 @@ export default function AdminDashboard() {
                 }
             });
 
+            const doctorCountsArray = Object.entries(doctorCountsMap)
+                .map(([name, count]) => ({ name, count }))
+                .sort((a, b) => b.count - a.count);
+
             setStats(prev => ({
                 ...prev,
                 totalVisits: snapshot.size
             }));
             setUserVisitCounts(counts);
+            setDoctorVisitCounts(doctorCountsArray);
             setVisitDates(dates);
         });
 
@@ -423,24 +437,37 @@ export default function AdminDashboard() {
             }
 
             if (dataType === 'visits') {
-                // Fetch all visits
-                const snapshot = await getDocs(collection(db, "visits"));
-                const visits = snapshot.docs.map(doc => {
+                // Fetch all visits and master records for joining
+                const [visitsSnap, masterSnap] = await Promise.all([
+                    getDocs(collection(db, "visits")),
+                    getDocs(collection(db, "master_records"))
+                ]);
+
+                // Create a map of doctor categories
+                const doctorCategories = {};
+                masterSnap.forEach(doc => {
+                    const data = doc.data();
+                    if (data.name && data.category) {
+                        doctorCategories[data.name.toLowerCase()] = data.category;
+                    }
+                });
+
+                const visits = visitsSnap.docs.map(doc => {
                     const visit = doc.data();
                     return {
                         'Doctor/Chemist Name': visit.name || '',
                         'Type': visit.type || '',
                         'City': visit.city || '',
                         'District': visit.district || '',
-                        'Call Type': visit.callType || '',
+                        'Call Type': visit.callType || doctorCategories[visit.name?.toLowerCase()] || '',
                         'Status': visit.status || '',
-                        'Products Promoted': visit.productsPromoted?.join(', ') || '',
+                        'Products Promoted': visit.productShown || visit.productsPromoted?.join(', ') || '',
                         'Samples Given': visit.samplesGiven?.join(', ') || '',
                         'Gifts Given': visit.giftsGiven?.join(', ') || '',
                         'POB Value': visit.pobValue || '',
                         'Remarks': visit.remarks || '',
                         'Visit Date': visit.visitedAt?.toDate().toLocaleDateString() || visit.createdAt?.toDate().toLocaleDateString() || '',
-                        'Created By': visit.createdByEmail || ''
+                        'Created By': visit.createdByName || visit.createdByEmail || ''
                     };
                 });
                 createAndDownloadExcel(visits, 'DCR_Visits', 'Visits');
@@ -638,6 +665,59 @@ export default function AdminDashboard() {
             dob: ''
         });
         setImportStep(1);
+    };
+
+    const handlePrintDoctorVisits = () => {
+        const printWindow = window.open('', '_blank');
+        const doctorTableRows = doctorVisitCounts.map(doc => `
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #eee;">${doc.name}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #eee; text-align: right;">${doc.count}</td>
+            </tr>
+        `).join('');
+
+        const html = `
+            <html>
+                <head>
+                    <title>Doctor Visit Distribution Report</title>
+                    <style>
+                        body { font-family: sans-serif; padding: 40px; color: #333; }
+                        h1 { color: #4f46e5; margin-bottom: 8px; }
+                        p { color: #666; margin-bottom: 24px; }
+                        table { width: 100%; border-collapse: collapse; }
+                        th { text-align: left; padding: 12px; background: #f8fafc; border-bottom: 2px solid #e2e8f0; }
+                        .text-right { text-align: right; }
+                        .footer { margin-top: 40px; font-size: 12px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Doctor Visit Distribution Report</h1>
+                    <p>Generated on: ${new Date().toLocaleString()}</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Doctor Name</th>
+                                <th class="text-right">Visit Count</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${doctorTableRows}
+                        </tbody>
+                    </table>
+                    <div class="footer">
+                        Generated by MR Administration Dashboard
+                    </div>
+                </body>
+            </html>
+        `;
+
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => {
+            printWindow.print();
+            printWindow.close();
+        }, 500);
     };
 
     return (
@@ -849,6 +929,58 @@ export default function AdminDashboard() {
                             </tbody>
                         </table>
                     </div>
+                </Card>
+            )}
+
+            {/* Doctor Visits Widget */}
+            {doctorVisitCounts && doctorVisitCounts.length > 0 && (
+                <Card className="p-0 overflow-hidden flex flex-col mb-8 border-l-4 border-purple-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
+                    <div className="p-6 border-b border-gray-100/50 flex justify-between items-center text-wrap-none">
+                        <div>
+                            <h3 className="text-lg font-semibold text-gray-900">Doctor Visit Distribution</h3>
+                            <p className="text-sm text-gray-500">Number of visits per doctor, sorted by frequency.</p>
+                        </div>
+                        <button
+                            onClick={handlePrintDoctorVisits}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-white border border-purple-200 text-purple-700 rounded-lg hover:bg-purple-50 transition-colors text-sm font-medium shadow-sm"
+                        >
+                            <span>🖨️</span>
+                            <span className="hidden sm:inline">Print Report</span>
+                        </button>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-gray-50/50 text-gray-500 uppercase">
+                                <tr>
+                                    <th className="px-6 py-3 font-medium">Doctor Name</th>
+                                    <th className="px-6 py-3 font-medium text-right">Visit Count</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                                {doctorVisitCounts.slice(0, doctorLimit).map((doctor, index) => (
+                                    <tr key={index} className="hover:bg-white/40 transition-colors">
+                                        <td className="px-6 py-4 font-medium text-gray-900">{doctor.name}</td>
+                                        <td className="px-6 py-4 text-right">
+                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
+                                                {doctor.count}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                    {doctorLimit < doctorVisitCounts.length && (
+                        <div className="p-4 bg-gray-50/30 text-center border-t border-gray-100/50">
+                            <button
+                                onClick={() => setDoctorLimit(prev => prev + 10)}
+                                className="text-indigo-600 hover:text-indigo-800 font-medium text-sm transition-colors flex items-center justify-center gap-1 mx-auto"
+                            >
+                                <span>Show More Doctors</span>
+                                <span className="text-lg">↓</span>
+                            </button>
+                        </div>
+                    )}
                 </Card>
             )}
 
