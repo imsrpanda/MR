@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if user is admin or superadmin
+    function isAdmin() {
+      return request.auth != null && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' || 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'super_admin' ||
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin');
+    }
+
+    // Users Collection: 
+    // - Everyone authenticated can read user docs (often needed for display names)
+    // - Only the user can edit their own basic info (if the app allowed, but here it's mostly admin)
+    // - Admins can read/write everything
+    match /users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin() || (request.auth != null && request.auth.uid == userId);
+    }
+
+    // Visits Collection:
+    // - Users can read/write their own visits
+    // - Admins can read/write all visits
+    match /visits/{visitId} {
+      allow read: if request.auth != null && (resource == null || resource.data.createdBy == request.auth.uid || isAdmin());
+      allow create: if request.auth != null;
+      allow update: if request.auth != null && (resource.data.createdBy == request.auth.uid || isAdmin());
+      allow delete: if request.auth != null && (resource.data.createdBy == request.auth.uid || isAdmin());
+    }
+
+    // Master Records:
+    // - All auth users can read
+    // - Only admins can write directly
+    match /master_records/{recordId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    // District Locations:
+    // - All auth users can read
+    // - Only admins can write
+    match /district_locations/{locationId} {
+      allow read: if request.auth != null;
+      allow write: if isAdmin();
+    }
+
+    // Pending Approvals:
+    // - Users can see their own requests
+    // - Admins can see and update all
+    match /pending_approvals/{approvalId} {
+      allow read: if request.auth != null && (resource == null || resource.data.requestedBy == request.auth.uid || isAdmin());
+      allow create: if request.auth != null;
+      allow update, delete: if isAdmin();
+    }
+
+    // Leaves:
+    // - Users can read/write their own leaves
+    // - Admins can see and update all
+    match /leaves/{leaveId} {
+      allow read: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+  }
+}

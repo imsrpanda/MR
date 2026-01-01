@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { db } from '../firebase/firebase';
 import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore';
@@ -35,6 +35,8 @@ export default function DCR() {
     const [masterRecords, setMasterRecords] = useState([]);
     const [dcrCities, setDcrCities] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
+    const [allUsers, setAllUsers] = useState([]);
+    const printRef = useRef();
 
     // Date Filter State
     const [dateFilter, setDateFilter] = useState('Today');
@@ -628,7 +630,7 @@ export default function DCR() {
                 </div>
 
                 {/* Table */}
-                <div className="overflow-x-auto flex-1">
+                <div className="overflow-x-auto flex-1" ref={printRef}>
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-50 text-gray-500 uppercase">
                             <tr>

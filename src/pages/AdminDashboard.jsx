@@ -6,6 +6,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
+import DoctorVisitWidget from '../components/widgets/DoctorVisitWidget';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { SPECIALISTS } from '../constants/specialists';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
@@ -454,6 +455,7 @@ export default function AdminDashboard() {
 
                 const visits = visitsSnap.docs.map(doc => {
                     const visit = doc.data();
+
                     return {
                         'Doctor/Chemist Name': visit.name || '',
                         'Type': visit.type || '',
@@ -891,6 +893,9 @@ export default function AdminDashboard() {
                     </ResponsiveContainer>
                 </div>
             </Card>
+
+            {/* Doctor Visit Widget */}
+            <DoctorVisitWidget />
 
             {/* Visits by User Widget */}
             {userVisitCounts && Object.keys(userVisitCounts).length > 0 && (
