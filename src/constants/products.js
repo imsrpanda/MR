@@ -3,5 +3,8 @@ export const PRODUCTS = [
     'INTE-WELL',
     'INTE-ZYME',
     'Intefert-f',
-    'Intefert-d'
+    'Intefert-d',
+    'INTE-WELL DROP',
+    'INTEZYME DROP',
+    'INTE-WELL CAPSULE'
 ];

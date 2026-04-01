@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './pages/Login';
 import SuperAdminDashboard from './pages/SuperAdminDashboard';
@@ -74,8 +75,10 @@ function AppRoutes() {
 }
 
 function App() {
+  // Use empty basename on native (Capacitor/Android/iOS), "/mr" on GitHub Pages web
+  const basename = Capacitor.isNativePlatform() ? '/' : '/mr';
   return (
-    <Router basename="/mr">
+    <Router basename={basename}>
       <AuthProvider>
         <AppRoutes />
       </AuthProvider>
