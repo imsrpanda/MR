@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Integritas MR</title>
+    <script type="text/javascript">
+      // GitHub Pages SPA redirect trick
+      // Encode the path and redirect to index.html with it as a query param
+      var l = window.location;
+      l.replace(
+        l.protocol + '//' + l.host + l.pathname.split('/').slice(0, 1).join('/') +
+        '/?/' + l.pathname.slice(1) + (l.search ? '&' + l.search.slice(1) : '') + l.hash
+      );
+    </script>
+  </head>
+  <body></body>
+</html>
