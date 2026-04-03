@@ -22,7 +22,7 @@ export default function DashboardLayout({ children, title, backgroundClass = "bg
     const navItems = [
         { label: 'Super Admin', path: '/super-admin', roles: ['super_admin'] },
         { label: 'Admin', path: '/admin', roles: ['admin'] },
-
+        { label: 'Bills', path: '/bills', roles: ['admin'] },
         { label: 'Dashboard', path: '/dashboard', roles: ['user'] },
         { label: 'Master', path: '/master', roles: ['admin', 'user'] },
         { label: 'DCR', path: '/dcr', roles: ['admin', 'user'] },
@@ -99,9 +99,9 @@ export default function DashboardLayout({ children, title, backgroundClass = "bg
     );
 
     return (
-        <div className={`min-h-screen flex ${backgroundClass}`}>
+        <div className={`min-h-screen print:min-h-0 print:h-auto print:block flex ${backgroundClass}`}>
             {/* Desktop Sidebar */}
-            <aside className="w-64 bg-white border-r border-gray-200 hidden md:flex flex-col">
+            <aside className="print:hidden w-64 bg-white border-r border-gray-200 hidden md:flex flex-col">
                 <NavContent />
             </aside>
 
@@ -118,8 +118,8 @@ export default function DashboardLayout({ children, title, backgroundClass = "bg
             )}
 
             {/* Mobile Header */}
-            <div className="flex-1 flex flex-col min-w-0">
-                <header className="bg-white shadow-sm border-b border-gray-200 md:hidden flex items-center justify-between p-4 sticky top-0 z-30">
+            <div className="flex-1 flex flex-col min-w-0 print:block print:w-full print:flex-none">
+                <header className="print:hidden bg-white shadow-sm border-b border-gray-200 md:hidden flex items-center justify-between p-4 sticky top-0 z-30">
                     <div className="flex items-center gap-3">
                         <button onClick={() => setIsMobileMenuOpen(true)} className="text-gray-500 hover:text-gray-700 focus:outline-none">
                             <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -131,9 +131,9 @@ export default function DashboardLayout({ children, title, backgroundClass = "bg
                 </header>
 
                 {/* Main Content */}
-                <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+                <main className="flex-1 p-4 md:p-8 overflow-y-auto print:overflow-visible print:block print:p-0">
                     <div className="max-w-7xl mx-auto">
-                        {title && <h1 className="text-xl md:text-3xl font-bold text-gray-900 mb-6 md:mb-8">{title}</h1>}
+                        {title && <h1 className="print:hidden text-xl md:text-3xl font-bold text-gray-900 mb-6 md:mb-8">{title}</h1>}
                         {children}
                     </div>
                 </main>
