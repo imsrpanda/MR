@@ -481,21 +481,24 @@ export default function Bill() {
                             {items.map((item, index) => (
                                 <tr key={item.id} className="border-b border-gray-200 print:border-dotted print:border-gray-400 align-top">
                                     <td className="border-r border-black p-1 text-center">{index + 1}</td>
-                                    <td className="border-r border-black p-0">
+                                    <td className="border-r border-black p-0 relative">
                                         <select 
-                                            className="w-full h-full p-1 focus:outline-none bg-transparent"
+                                            className="w-full h-full p-1 focus:outline-none bg-transparent print:hidden"
                                             value={item.product}
                                             onChange={(e) => updateItem(index, 'product', e.target.value)}
                                         >
                                             <option value=""></option>
                                             {PRODUCT_NAMES.map(p => <option key={p} value={p}>{p}</option>)}
                                         </select>
+                                        <div className="hidden print:block p-1 text-left uppercase whitespace-normal">
+                                            {item.product}
+                                        </div>
                                     </td>
                                     <td className="border-r border-black p-0"><input className="w-full text-center focus:outline-none bg-transparent" value={item.hsn} onChange={(e) => updateItem(index, 'hsn', e.target.value)} /></td>
                                     <td className="border-r border-black p-0"><input className="w-full text-center focus:outline-none bg-transparent" value={item.pack} onChange={(e) => updateItem(index, 'pack', e.target.value)} /></td>
-                                    <td className="border-r border-black p-0">
+                                    <td className="border-r border-black p-0 relative">
                                         <select 
-                                            className="w-full h-full p-1 focus:outline-none bg-transparent"
+                                            className="w-full h-full p-1 focus:outline-none bg-transparent print:hidden"
                                             value={item.bno}
                                             onChange={(e) => updateItem(index, 'bno', e.target.value)}
                                         >
@@ -509,6 +512,9 @@ export default function Bill() {
                                                 ))
                                             }
                                         </select>
+                                        <div className="hidden print:block p-1 text-center uppercase">
+                                            {item.bno}
+                                        </div>
                                     </td>
                                     <td className="border-r border-black p-0"><input className="w-full text-center focus:outline-none bg-transparent" value={item.exp} onChange={(e) => updateItem(index, 'exp', e.target.value)} placeholder="MM/YY" /></td>
                                     <td className="border-r border-black p-0"><input type="number" className="w-full text-right p-1 focus:outline-none bg-transparent" value={item.quantity} onChange={(e) => updateItem(index, 'quantity', e.target.value)} /></td>
