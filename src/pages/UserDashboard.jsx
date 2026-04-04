@@ -7,7 +7,7 @@ import { db } from '../firebase/firebase';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import MultiSelect from '../components/ui/MultiSelect';
-import { PRODUCTS } from '../constants/products';
+import { PRODUCTS, PRODUCT_NAMES } from '../constants/products';
 
 import { useNavigate } from 'react-router-dom';
 
@@ -375,7 +375,7 @@ export default function UserDashboard() {
                     <div>
                         <MultiSelect
                             label="Products Shown"
-                            options={PRODUCTS}
+                            options={PRODUCT_NAMES}
                             value={taskFormData.productShown ? taskFormData.productShown.split(',').map(p => p.trim()).filter(p => p) : []}
                             onChange={(newVal) => setTaskFormData({ ...taskFormData, productShown: newVal.join(', ') })}
                             placeholder="Select products..."

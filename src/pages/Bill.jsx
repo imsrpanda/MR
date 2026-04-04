@@ -1,14 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../components/layout/DashboardLayout';
-import { PRODUCTS } from '../constants/products';
+import { PRODUCTS, PRODUCT_NAMES } from '../constants/products';
 import { db } from '../firebase/firebase';
-import { collection, addDoc, serverTimestamp, setDoc, doc, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, setDoc, doc, onSnapshot, query, where, getDocs, increment, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { QRCodeCanvas } from 'qrcode.react';
-
-// Always use the public hosted URL for QR codes so they work in the Android APK too
-const PUBLIC_APP_URL = 'https://imsrpanda.github.io/MR';
 
 export default function Bill() {
     const { currentUser } = useAuth();
@@ -73,12 +69,23 @@ export default function Bill() {
     const [savedCustomers, setSavedCustomers] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [excludePts, setExcludePts] = useState(false);
+    const [syncWithStock, setSyncWithStock] = useState(false);
+    const [availableStocks, setAvailableStocks] = useState([]);
 
     useEffect(() => {
         if (isReadOnly) return;
         const unsubscribe = onSnapshot(collection(db, "customers"), (snapshot) => {
             const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setSavedCustomers(data);
+        });
+        return () => unsubscribe();
+    }, [isReadOnly]);
+
+    useEffect(() => {
+        if (isReadOnly) return;
+        const unsubscribe = onSnapshot(collection(db, "stocks"), (snapshot) => {
+            const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setAvailableStocks(data);
         });
         return () => unsubscribe();
     }, [isReadOnly]);
@@ -123,12 +130,25 @@ export default function Bill() {
             const base = mrp / (1 + gst / 100);
             item.ptr = base * 0.8;
             item.pts = item.ptr * 0.9;
-            item.amount = qty * item.pts;
+            item.amount = qty * (excludePts ? item.ptr : item.pts);
         } else if (['ptr', 'pts'].includes(field)) {
             // If user manually overrides PTR or PTS, recalculate amount
             const qty = parseFloat(item.quantity) || 0;
-            const pts = parseFloat(item.pts) || 0;
-            item.amount = qty * pts;
+            const price = excludePts ? parseFloat(item.ptr) : parseFloat(item.pts);
+            item.amount = qty * price;
+        } else if (field === 'product') {
+            // Auto-fill HSN and Pack when product is selected
+            const productData = PRODUCTS.find(p => p.name === value);
+            if (productData) {
+                item.hsn = productData.hsn;
+                item.pack = productData.pack;
+            }
+        } else if (field === 'bno') {
+            // Auto-fill expiry when batch is selected
+            const stockData = availableStocks.find(s => s.productName === item.product && s.batchNo === value);
+            if (stockData) {
+                item.exp = stockData.expiry;
+            }
         }
 
         newItems[index] = item;
@@ -150,6 +170,16 @@ export default function Bill() {
             setItems(newItems);
         }
     };
+
+    // Recalculate all amounts when excludePts changes
+    useEffect(() => {
+        if (isReadOnly) return;
+        setItems(prevItems => prevItems.map(item => {
+            const qty = parseFloat(item.quantity) || 0;
+            const price = excludePts ? parseFloat(item.ptr) : parseFloat(item.pts);
+            return { ...item, amount: qty * price };
+        }));
+    }, [excludePts, isReadOnly]);
 
     // Recalculate totals whenever items or footer percentages change
     useEffect(() => {
@@ -222,7 +252,45 @@ export default function Bill() {
                 totals,
                 createdAt: serverTimestamp(),
                 createdBy: currentUser.uid,
+                syncWithStock: syncWithStock
             });
+
+            // Stock Sync Logic
+            if (syncWithStock) {
+                try {
+                    for (const item of items) {
+                        if (item.product && item.bno) {
+                            const totalDeduct = (Number(item.quantity) || 0) + (Number(item.fQunt) || 0);
+                            if (totalDeduct > 0) {
+                                // Normalize for matching
+                                const pName = item.product.trim();
+                                const bNo = item.bno.trim();
+
+                                const q = query(
+                                    collection(db, "stocks"),
+                                    where("productName", "==", pName),
+                                    where("batchNo", "==", bNo)
+                                );
+                                
+                                const snapshot = await getDocs(q);
+                                if (!snapshot.empty) {
+                                    const stockDoc = snapshot.docs[0];
+                                    await updateDoc(doc(db, "stocks", stockDoc.id), {
+                                        closingQuantity: increment(-totalDeduct),
+                                        updatedAt: serverTimestamp()
+                                    });
+                                    console.log(`Deducted ${totalDeduct} from ${pName} batch ${bNo}`);
+                                } else {
+                                    console.warn(`No stock found for ${pName} batch ${bNo}`);
+                                }
+                            }
+                        }
+                    }
+                } catch (stockError) {
+                    console.error("Error updating stock during bill save:", stockError);
+                    alert("Bill saved, but Stock Sync failed: " + stockError.message);
+                }
+            }
             alert("Bill saved successfully!");
             navigate('/bills');
         } catch (error) {
@@ -246,6 +314,17 @@ export default function Bill() {
                     />
                     Exclude PTS from Print
                 </label>
+                {!isReadOnly && (
+                    <label className="flex items-center gap-2 text-sm text-indigo-700 font-bold cursor-pointer bg-indigo-50 px-3 py-1.5 rounded-lg border border-indigo-200 shadow-sm hover:bg-indigo-100 transition-all">
+                        <input 
+                            type="checkbox" 
+                            checked={syncWithStock} 
+                            onChange={(e) => setSyncWithStock(e.target.checked)} 
+                            className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                        />
+                        Sync with Stock
+                    </label>
+                )}
                 <button 
                     onClick={handlePrint}
                     className="bg-gray-100 text-gray-800 border border-gray-300 px-4 py-2 rounded shadow hover:bg-gray-200 transition"
@@ -285,12 +364,6 @@ export default function Bill() {
                     <h1 className="text-xl print:text-lg">INTEGRITAS RESEARCH</h1>
                     <p className="text-xs print:text-[10px]">INTEGRITAS RESEARCH (HO-DELHI) BALAJI NAGAR DIGAPAHANDI-761012(ODISHA). PH. 8249660880</p>
                     <p className="text-xs print:text-[10px]">FSSAI.No. : 12026011000049 * GSTIN No. 21FDQPS7606E1ZC</p>
-                    {viewData?.id && (
-                        <div className="absolute right-0 top-0 print:right-0 print:top-0 origin-top-right flex flex-col items-center">
-                             <QRCodeCanvas value={`${PUBLIC_APP_URL}/receipt/${viewData.id}`} size={64} />
-                             <p className="text-[8px] mt-1 text-gray-500 max-w-[64px] leading-tight break-words">Scan for E-Bill</p>
-                        </div>
-                    )}
                 </div>
 
                 {/* Top User Input Section */}
@@ -415,12 +488,28 @@ export default function Bill() {
                                             onChange={(e) => updateItem(index, 'product', e.target.value)}
                                         >
                                             <option value=""></option>
-                                            {PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
+                                            {PRODUCT_NAMES.map(p => <option key={p} value={p}>{p}</option>)}
                                         </select>
                                     </td>
                                     <td className="border-r border-black p-0"><input className="w-full text-center focus:outline-none bg-transparent" value={item.hsn} onChange={(e) => updateItem(index, 'hsn', e.target.value)} /></td>
                                     <td className="border-r border-black p-0"><input className="w-full text-center focus:outline-none bg-transparent" value={item.pack} onChange={(e) => updateItem(index, 'pack', e.target.value)} /></td>
-                                    <td className="border-r border-black p-0"><input className="w-full text-center focus:outline-none bg-transparent uppercase" value={item.bno} onChange={(e) => updateItem(index, 'bno', e.target.value)} /></td>
+                                    <td className="border-r border-black p-0">
+                                        <select 
+                                            className="w-full h-full p-1 focus:outline-none bg-transparent"
+                                            value={item.bno}
+                                            onChange={(e) => updateItem(index, 'bno', e.target.value)}
+                                        >
+                                            <option value=""></option>
+                                            {availableStocks
+                                                .filter(s => s.productName === item.product && s.closingQuantity > 0)
+                                                .map(s => (
+                                                    <option key={s.id} value={s.batchNo}>
+                                                        {s.batchNo} ({s.closingQuantity})
+                                                    </option>
+                                                ))
+                                            }
+                                        </select>
+                                    </td>
                                     <td className="border-r border-black p-0"><input className="w-full text-center focus:outline-none bg-transparent" value={item.exp} onChange={(e) => updateItem(index, 'exp', e.target.value)} placeholder="MM/YY" /></td>
                                     <td className="border-r border-black p-0"><input type="number" className="w-full text-right p-1 focus:outline-none bg-transparent" value={item.quantity} onChange={(e) => updateItem(index, 'quantity', e.target.value)} /></td>
                                     <td className="border-r border-black p-0"><input type="number" className="w-full text-right p-1 focus:outline-none bg-transparent" value={item.fQunt} onChange={(e) => updateItem(index, 'fQunt', e.target.value)} /></td>

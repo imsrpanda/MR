@@ -14,6 +14,7 @@ import LMS from './pages/LMS';
 import Bill from './pages/Bill';
 import BillsList from './pages/BillsList';
 import PublicBillView from './pages/PublicBillView';
+import StockManagement from './pages/StockManagement';
 
 function AppRoutes() {
   const { userRole, loading } = useAuth();
@@ -42,6 +43,11 @@ function AppRoutes() {
       <Route path="/bills" element={
         <ProtectedRoute allowedRoles={['admin']}>
           <BillsList />
+        </ProtectedRoute>
+      } />
+      <Route path="/stock" element={
+        <ProtectedRoute allowedRoles={['admin']}>
+          <StockManagement />
         </ProtectedRoute>
       } />
 

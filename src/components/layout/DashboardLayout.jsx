@@ -23,6 +23,7 @@ export default function DashboardLayout({ children, title, backgroundClass = "bg
         { label: 'Super Admin', path: '/super-admin', roles: ['super_admin'] },
         { label: 'Admin', path: '/admin', roles: ['admin'] },
         { label: 'Bills', path: '/bills', roles: ['admin'] },
+        { label: 'Stock', path: '/stock', roles: ['admin'] },
         { label: 'Dashboard', path: '/dashboard', roles: ['user'] },
         { label: 'Master', path: '/master', roles: ['admin', 'user'] },
         { label: 'DCR', path: '/dcr', roles: ['admin', 'user'] },

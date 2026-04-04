@@ -10,7 +10,7 @@ import ColumnToggle from '../components/ui/ColumnToggle';
 import MultiSelect from '../components/ui/MultiSelect';
 import { useAuth } from '../contexts/AuthContext';
 import { ODISHA_DISTRICTS } from '../constants/districts';
-import { PRODUCTS } from '../constants/products';
+import { PRODUCTS, PRODUCT_NAMES } from '../constants/products';
 import { SPECIALISTS } from '../constants/specialists';
 
 const MASTER_RECORDS_COLS_DEF = [
@@ -674,7 +674,7 @@ export default function MasterRecords() {
                     <div>
                         <MultiSelect
                             label="Product Shown"
-                            options={PRODUCTS}
+                            options={PRODUCT_NAMES}
                             value={formData.productShown ? formData.productShown.split(',').map(p => p.trim()).filter(p => p) : []}
                             onChange={(newVal) => setFormData({ ...formData, productShown: newVal.join(', ') })}
                             placeholder="Select products..."
