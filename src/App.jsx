@@ -7,6 +7,7 @@ import SuperAdminDashboard from './pages/SuperAdminDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import UserDashboard from './pages/UserDashboard';
 import MasterRecords from './pages/MasterRecords';
+import Chemists from './pages/Chemists';
 import ProtectedRoute from './components/ProtectedRoute';
 import Profile from './pages/Profile';
 import DCR from './pages/DCR';
@@ -77,6 +78,12 @@ function AppRoutes() {
       <Route path="/master" element={
         <ProtectedRoute allowedRoles={['admin', 'user']}>
           <MasterRecords />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/chemists" element={
+        <ProtectedRoute allowedRoles={['admin', 'user']}>
+          <Chemists />
         </ProtectedRoute>
       } />
 

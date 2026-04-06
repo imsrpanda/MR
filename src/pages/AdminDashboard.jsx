@@ -7,6 +7,7 @@ import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
 import DoctorVisitWidget from '../components/widgets/DoctorVisitWidget';
+import ChemistPurchaseWidget from '../components/widgets/ChemistPurchaseWidget';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { SPECIALISTS } from '../constants/specialists';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
@@ -99,22 +100,18 @@ export default function AdminDashboard() {
     }, [employeesColumns]);
 
     useEffect(() => {
-        // Subscribe to Master Records to count Doctors and Chemists
-        const unsubscribeRecords = onSnapshot(collection(db, "master_records"), (snapshot) => {
+        // Subscribe to Master Records to count Doctors
+        const unsubscribeMaster = onSnapshot(collection(db, "master_records"), (snapshot) => {
             let doctorCount = 0;
-            let chemistCount = 0;
-
             snapshot.forEach((doc) => {
-                const data = doc.data();
-                if (data.type === 'Doctor') doctorCount++;
-                if (data.type === 'Chemist') chemistCount++;
+                if (doc.data().type === 'Doctor') doctorCount++;
             });
+            setStats(prev => ({ ...prev, doctors: doctorCount }));
+        });
 
-            setStats(prev => ({
-                ...prev,
-                doctors: doctorCount,
-                chemists: chemistCount
-            }));
+        // Subscribe to Chemists to count
+        const unsubscribeChemists = onSnapshot(collection(db, "chemists"), (snapshot) => {
+            setStats(prev => ({ ...prev, chemists: snapshot.size }));
         });
 
         // Subscribe to Users to count Employees (role == 'user') and get list
@@ -185,7 +182,8 @@ export default function AdminDashboard() {
         });
 
         return () => {
-            unsubscribeRecords();
+            unsubscribeMaster();
+            unsubscribeChemists();
             unsubscribeUsers();
             unsubscribeApprovals();
             unsubscribeVisits();
@@ -302,17 +300,18 @@ export default function AdminDashboard() {
     const handleApprove = async (request) => {
         if (!window.confirm("Are you sure you want to approve this request?")) return;
         try {
-            // Execute the requested operation
+            const targetCollection = request.collection || 'master_records';
+
             if (request.type === 'ADD') {
-                await addDoc(collection(db, "master_records"), {
+                await addDoc(collection(db, targetCollection), {
                     ...request.data,
                     createdAt: serverTimestamp(),
-                    createdByRole: 'user', // Preserving original intent
+                    createdByRole: 'user',
                     approvedBy: 'admin',
                     approvedAt: serverTimestamp()
                 });
             } else if (request.type === 'UPDATE') {
-                await updateDoc(doc(db, "master_records", request.recordId), {
+                await updateDoc(doc(db, targetCollection, request.recordId), {
                     ...request.data,
                     updatedAt: serverTimestamp(),
                     updatedByRole: 'user',
@@ -320,7 +319,7 @@ export default function AdminDashboard() {
                     approvedAt: serverTimestamp()
                 });
             } else if (request.type === 'DELETE') {
-                await deleteDoc(doc(db, "master_records", request.recordId));
+                await deleteDoc(doc(db, targetCollection, request.recordId));
             }
 
             // Update approval status
@@ -856,7 +855,7 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="h-[300px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                         <AreaChart data={getTrendData(visitDates, trendPeriod)}>
                             <defs>
                                 <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1">
@@ -896,6 +895,9 @@ export default function AdminDashboard() {
 
             {/* Doctor Visit Widget */}
             <DoctorVisitWidget />
+
+            {/* Chemist Purchase Widget */}
+            <ChemistPurchaseWidget />
 
             {/* Visits by User Widget */}
             {userVisitCounts && Object.keys(userVisitCounts).length > 0 && (
