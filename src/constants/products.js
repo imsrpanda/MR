@@ -6,7 +6,7 @@ export const PRODUCTS = [
     { name: 'Intefert-d', hsn: '21069099', pack: '1x10' },
     { name: 'INTE-WELL DROP', hsn: '21061000', pack: '1x1' },
     { name: 'INTEZYME DROP', hsn: '21061000', pack: '1x1' },
-    { name: 'INTE-WELL CAPSULE', hsn: '---', pack: '---' }
+    { name: 'INTE-WELL TABLET', hsn: '---', pack: '---' }
 ];
 
 export const PRODUCT_NAMES = PRODUCTS.map(p => p.name);
