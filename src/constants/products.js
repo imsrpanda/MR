@@ -6,5 +6,5 @@ export const PRODUCTS = [
     'Intefert-d',
     'INTE-WELL DROP',
     'INTEZYME DROP',
-    'INTE-WELL TABLET'
+    'INTE-WELL TABLE'
 ];
