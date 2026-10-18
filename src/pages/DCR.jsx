@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { db } from '../firebase/firebase';
-import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where, getDoc } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, where, getDoc, getDocs, limit } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -9,6 +9,7 @@ import Card from '../components/ui/Card';
 import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
 import MultiSelect from '../components/ui/MultiSelect';
+import Pagination from '../components/ui/Pagination';
 import { useAuth } from '../contexts/AuthContext';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { PRODUCTS, PRODUCT_NAMES } from '../constants/products';
@@ -27,16 +28,24 @@ const DCR_COLS_DEF = [
     { id: 'actions', label: 'Actions' }
 ];
 
+// Module-level cache for master records in DCR to avoid re-fetching on every modal open
+let dcrMasterRecordsCache = null;
+
 export default function DCR() {
     const { userRole, userData, currentUser, loading: authLoading } = useAuth();
     const [visits, setVisits] = useState([]);
     const [loading, setLoading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
-    const [masterRecords, setMasterRecords] = useState([]);
+    const [masterRecords, setMasterRecords] = useState(() => dcrMasterRecordsCache || []);
+    const [fetchingMasterRecords, setFetchingMasterRecords] = useState(false);
     const [dcrCities, setDcrCities] = useState([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     const [allUsers, setAllUsers] = useState([]);
     const printRef = useRef();
+
+    // Pagination State
+    const [currentPage, setCurrentPage] = useState(1);
+    const [pageSize, setPageSize] = useState(25);
 
     // Date Filter State
     const [dateFilter, setDateFilter] = useState('Today');
@@ -45,6 +54,11 @@ export default function DCR() {
     const [statusFilter, setStatusFilter] = useState('All');
     const [userFilter, setUserFilter] = useState('All');
     const [users, setUsers] = useState([]);
+
+    // Reset pagination to page 1 whenever any filter changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, dateFilter, customStartDate, customEndDate, statusFilter, userFilter]);
 
     // Handle Navigation State from Dashboard
     const location = useLocation();
@@ -133,20 +147,53 @@ export default function DCR() {
         return () => unsubscribe();
     }, [userRole, currentUser]);
 
-    // Subscribe to Master Records for suggestions
+    // Fetch Master Records on-demand ONLY when modal is opened (avoids 3,000+ reads on every DCR load!)
     useEffect(() => {
-        const q = query(collection(db, "master_records"), orderBy("name"));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const data = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            setMasterRecords(data);
-        }, (error) => {
-            console.error("Error fetching master records:", error);
-        });
-        return () => unsubscribe();
-    }, []);
+        if (!isModalOpen || masterRecords.length > 0) return;
+
+        let isMounted = true;
+        const fetchMasterRecords = async () => {
+            setFetchingMasterRecords(true);
+            try {
+                let qRecords;
+                if (userRole === 'user' && userData?.assignedDistricts?.length > 0) {
+                    if (userData.assignedDistricts.length === 1) {
+                        qRecords = query(
+                            collection(db, "master_records"),
+                            where("district", "==", userData.assignedDistricts[0])
+                        );
+                    } else if (userData.assignedDistricts.length <= 10) {
+                        qRecords = query(
+                            collection(db, "master_records"),
+                            where("district", "in", userData.assignedDistricts)
+                        );
+                    } else {
+                        qRecords = query(collection(db, "master_records"));
+                    }
+                } else {
+                    qRecords = query(collection(db, "master_records"));
+                }
+
+                const snap = await getDocs(qRecords);
+                if (isMounted) {
+                    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                    data.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                    dcrMasterRecordsCache = data;
+                    setMasterRecords(data);
+                }
+            } catch (err) {
+                console.error("Error fetching master records on demand:", err);
+            } finally {
+                if (isMounted) setFetchingMasterRecords(false);
+            }
+        };
+
+        fetchMasterRecords();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [isModalOpen, userRole, userData, masterRecords.length]);
 
     // Subscribe to Users for filter (Admin only)
     useEffect(() => {
@@ -522,6 +569,12 @@ export default function DCR() {
         return true;
     });
 
+    // Paginated slice for current page
+    const paginatedVisits = useMemo(() => {
+        const start = (currentPage - 1) * pageSize;
+        return filteredVisits.slice(start, start + pageSize);
+    }, [filteredVisits, currentPage, pageSize]);
+
     if (authLoading || !currentUser) {
         return <div className="p-8 flex justify-center text-gray-500">Loading user data...</div>;
     }
@@ -647,7 +700,7 @@ export default function DCR() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {filteredVisits.map((visit) => (
+                            {paginatedVisits.map((visit) => (
                                 <tr key={visit.id} className="hover:bg-gray-50 transition-colors">
                                     {visibleColumns.includes('createdDate') && (
                                         <td className="px-6 py-4 text-gray-500 whitespace-nowrap">
@@ -729,6 +782,17 @@ export default function DCR() {
                         </tbody>
                     </table>
                 </div>
+
+                {/* Pagination Controls */}
+                <Pagination
+                    currentPage={currentPage}
+                    totalPages={Math.ceil(filteredVisits.length / pageSize) || 1}
+                    totalItems={filteredVisits.length}
+                    pageSize={pageSize}
+                    onPageChange={setCurrentPage}
+                    onPageSizeChange={setPageSize}
+                    pageSizeOptions={[10, 25, 50, 100]}
+                />
             </Card>
 
             {/* Modal */}
@@ -798,7 +862,13 @@ export default function DCR() {
                                 />
                                 {showSuggestions && !editingVisit && formData.name && (
                                     <ul className="absolute z-50 w-full bg-white border border-gray-300 rounded-b-lg shadow-lg max-h-60 overflow-y-auto mt-1 left-0">
-                                        {filteredMasterOptions
+                                        {fetchingMasterRecords && (
+                                            <li className="px-4 py-3 text-xs text-gray-500 flex items-center gap-2">
+                                                <div className="w-3.5 h-3.5 border-2 border-indigo-600/30 border-t-indigo-600 rounded-full animate-spin" />
+                                                Loading directory records...
+                                            </li>
+                                        )}
+                                        {!fetchingMasterRecords && filteredMasterOptions
                                             .filter(r => r.name.toLowerCase().includes(formData.name.toLowerCase()))
                                             .map((record) => (
                                                 <li
@@ -823,7 +893,7 @@ export default function DCR() {
                                                     </div>
                                                 </li>
                                             ))}
-                                        {filteredMasterOptions.filter(r => r.name.toLowerCase().includes(formData.name.toLowerCase())).length === 0 && (
+                                        {!fetchingMasterRecords && filteredMasterOptions.filter(r => r.name.toLowerCase().includes(formData.name.toLowerCase())).length === 0 && (
                                             <li className="px-4 py-2 text-sm text-gray-500 italic">No matches found</li>
                                         )}
                                     </ul>

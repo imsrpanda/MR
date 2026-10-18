@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, onSnapshot, query, orderBy, serverTimestamp, where } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, deleteDoc, doc, getDoc, getDocs, setDoc, onSnapshot, query, orderBy, serverTimestamp, where, limit, startAfter, getCountFromServer } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -8,6 +8,7 @@ import Card from '../components/ui/Card';
 import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
 import MultiSelect from '../components/ui/MultiSelect';
+import Pagination from '../components/ui/Pagination';
 import { useAuth } from '../contexts/AuthContext';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { PRODUCTS, PRODUCT_NAMES } from '../constants/products';
@@ -28,7 +29,17 @@ export default function MasterRecords() {
     const { userRole, userData, currentUser } = useAuth();
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [fetchingRecords, setFetchingRecords] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
+
+    // Pagination State
+    const [currentPage, setCurrentPage] = useState(1);
+    const [pageSize, setPageSize] = useState(25);
+    const [totalCount, setTotalCount] = useState(0);
+    const [selectedType, setSelectedType] = useState('All');
+    const [selectedDistrict, setSelectedDistrict] = useState('All');
+    const [pageCache, setPageCache] = useState({});
+    const [pageCursors, setPageCursors] = useState({});
 
     // Column Preferences State
     const [visibleColumns, setVisibleColumns] = useState(() => {
@@ -162,22 +173,148 @@ export default function MasterRecords() {
         return ODISHA_DISTRICTS;
     }, [userRole, userData]);
 
-    // Subscribe to Master Records
+    // Build base query constraints based on role, type, and district filters
+    const getBaseConstraints = () => {
+        const constraints = [];
+        if (selectedType !== 'All') {
+            constraints.push(where("type", "==", selectedType));
+        }
+        if (selectedDistrict !== 'All') {
+            constraints.push(where("district", "==", selectedDistrict));
+        } else if (userRole === 'user' && userData?.assignedDistricts?.length > 0) {
+            if (userData.assignedDistricts.length === 1) {
+                constraints.push(where("district", "==", userData.assignedDistricts[0]));
+            } else if (userData.assignedDistricts.length <= 30) {
+                constraints.push(where("district", "in", userData.assignedDistricts));
+            }
+        }
+        return constraints;
+    };
+
+    // Load total count and Page 1 when filters or pageSize change
     useEffect(() => {
-        console.log("MasterRecords: Subscribing to master_records");
-        const q = query(collection(db, "master_records"), orderBy("createdAt", "desc"));
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const data = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-            console.log("MasterRecords: Fetched records", data.length);
-            setRecords(data);
-        }, (error) => {
-            console.error("Error fetching records:", error);
-        });
-        return () => unsubscribe();
-    }, []);
+        let isMounted = true;
+
+        const loadPageOne = async () => {
+            setFetchingRecords(true);
+            setRecords([]);
+            setPageCache({});
+            setPageCursors({});
+            setCurrentPage(1);
+
+            try {
+                const constraints = getBaseConstraints();
+                const baseQ = query(collection(db, "master_records"), ...constraints);
+
+                // 1. Get exact total count for the filter via aggregation (~1-3 reads)
+                try {
+                    const countSnap = await getCountFromServer(baseQ);
+                    if (isMounted) {
+                        setTotalCount(countSnap.data().count);
+                    }
+                } catch (cntErr) {
+                    console.warn("Could not get count from server:", cntErr);
+                }
+
+                // 2. Fetch Page 1 (only pageSize reads!)
+                let pageQ;
+                try {
+                    pageQ = query(baseQ, orderBy("createdAt", "desc"), limit(pageSize));
+                    const snapshot = await getDocs(pageQ);
+                    if (isMounted) {
+                        const docsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                        setRecords(docsData);
+                        setPageCache({ 1: docsData });
+                        if (snapshot.docs.length > 0) {
+                            setPageCursors({ 1: snapshot.docs[snapshot.docs.length - 1] });
+                        }
+                    }
+                } catch (idxError) {
+                    // Fallback without orderBy if composite index is pending
+                    pageQ = query(baseQ, limit(pageSize));
+                    const snapshot = await getDocs(pageQ);
+                    if (isMounted) {
+                        const docsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                        docsData.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                        setRecords(docsData);
+                        setPageCache({ 1: docsData });
+                        if (snapshot.docs.length > 0) {
+                            setPageCursors({ 1: snapshot.docs[snapshot.docs.length - 1] });
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Error loading master records page 1:", err);
+            } finally {
+                if (isMounted) setFetchingRecords(false);
+            }
+        };
+
+        loadPageOne();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [selectedType, selectedDistrict, pageSize, userRole, userData]);
+
+    // Handle Page Change with memory caching (navigating back to viewed pages costs ZERO reads)
+    const handlePageChange = async (targetPage) => {
+        if (targetPage === currentPage || targetPage < 1) return;
+
+        // If page is already in local session cache, return immediately (0 reads)
+        if (pageCache[targetPage]) {
+            setRecords(pageCache[targetPage]);
+            setCurrentPage(targetPage);
+            return;
+        }
+
+        setFetchingRecords(true);
+        try {
+            const constraints = getBaseConstraints();
+            const baseQ = query(collection(db, "master_records"), ...constraints);
+            const prevCursor = pageCursors[targetPage - 1];
+
+            let pageQ;
+            try {
+                if (prevCursor) {
+                    pageQ = query(baseQ, orderBy("createdAt", "desc"), startAfter(prevCursor), limit(pageSize));
+                } else {
+                    pageQ = query(baseQ, orderBy("createdAt", "desc"), limit(pageSize));
+                }
+                const snapshot = await getDocs(pageQ);
+                const docsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+
+                setRecords(docsData);
+                setPageCache(prev => ({ ...prev, [targetPage]: docsData }));
+                if (snapshot.docs.length > 0) {
+                    setPageCursors(prev => ({ ...prev, [targetPage]: snapshot.docs[snapshot.docs.length - 1] }));
+                }
+                setCurrentPage(targetPage);
+            } catch (idxError) {
+                if (prevCursor) {
+                    pageQ = query(baseQ, startAfter(prevCursor), limit(pageSize));
+                } else {
+                    pageQ = query(baseQ, limit(pageSize));
+                }
+                const snapshot = await getDocs(pageQ);
+                const docsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                setRecords(docsData);
+                setPageCache(prev => ({ ...prev, [targetPage]: docsData }));
+                if (snapshot.docs.length > 0) {
+                    setPageCursors(prev => ({ ...prev, [targetPage]: snapshot.docs[snapshot.docs.length - 1] }));
+                }
+                setCurrentPage(targetPage);
+            }
+        } catch (err) {
+            console.error("Error loading master records page:", err);
+        } finally {
+            setFetchingRecords(false);
+        }
+    };
+
+    const handlePageSizeChange = (newSize) => {
+        setPageSize(newSize);
+    };
 
     // Subscribe to Pending Approvals for current user
     useEffect(() => {
@@ -365,12 +502,22 @@ export default function MasterRecords() {
                         updatedAt: serverTimestamp(),
                         updatedByRole: userRole
                     });
+                    const updatedRecord = { ...editingRecord, ...dataToSave };
+                    setRecords(prev => prev.map(r => r.id === editingRecord.id ? updatedRecord : r));
+                    setPageCache(prev => ({
+                        ...prev,
+                        [currentPage]: (prev[currentPage] || []).map(r => r.id === editingRecord.id ? updatedRecord : r)
+                    }));
                 } else {
-                    await addDoc(collection(db, "master_records"), {
+                    const docRef = await addDoc(collection(db, "master_records"), {
                         ...dataToSave,
                         createdAt: serverTimestamp(),
                         createdByRole: userRole
                     });
+                    const newRecord = { id: docRef.id, ...dataToSave };
+                    setRecords(prev => [newRecord, ...prev]);
+                    setTotalCount(prev => prev + 1);
+                    setPageCache({});
                 }
             }
             handleCloseModal();
@@ -420,6 +567,12 @@ export default function MasterRecords() {
                 } else {
                     // Admin: Direct delete
                     await deleteDoc(doc(db, "master_records", id));
+                    setRecords(prev => prev.filter(r => r.id !== id));
+                    setTotalCount(prev => Math.max(0, prev - 1));
+                    setPageCache(prev => ({
+                        ...prev,
+                        [currentPage]: (prev[currentPage] || []).filter(r => r.id !== id)
+                    }));
                 }
             } catch (error) {
                 console.error("Error deleting record: ", error);
@@ -459,22 +612,51 @@ export default function MasterRecords() {
         <DashboardLayout title="Master Records">
             <Card className="p-0 overflow-hidden flex flex-col min-h-[500px]">
                 {/* Toolbar */}
-                <div className="p-6 border-b border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                    <div className="relative flex-1 max-w-md">
-                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                            </svg>
+                <div className="p-6 border-b border-gray-100 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1">
+                        <div className="relative flex-1 max-w-md">
+                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                <svg className="h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                </svg>
+                            </div>
+                            <input
+                                type="text"
+                                placeholder="Search in page by name or city..."
+                                className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition duration-150 ease-in-out"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                            />
                         </div>
-                        <input
-                            type="text"
-                            placeholder="Search by name, city, or district..."
-                            className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition duration-150 ease-in-out"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                        />
+
+                        {/* Server-level Filter Dropdowns (reduces Firestore reads) */}
+                        <div className="flex items-center gap-2">
+                            <select
+                                value={selectedType}
+                                onChange={(e) => setSelectedType(e.target.value)}
+                                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-700 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                                title="Filter by Type"
+                            >
+                                <option value="All">All Types</option>
+                                <option value="Doctor">Doctor</option>
+                                <option value="Chemist">Chemist</option>
+                            </select>
+
+                            <select
+                                value={selectedDistrict}
+                                onChange={(e) => setSelectedDistrict(e.target.value)}
+                                className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-700 focus:ring-1 focus:ring-indigo-500 focus:outline-none max-w-[160px]"
+                                title="Filter by District"
+                            >
+                                <option value="All">All Districts</option>
+                                {availableDistricts.map(d => (
+                                    <option key={d} value={d}>{d}</option>
+                                ))}
+                            </select>
+                        </div>
                     </div>
-                    <div className="flex items-center gap-2">
+
+                    <div className="flex items-center gap-2 flex-wrap">
                         <ColumnToggle
                             columns={MASTER_RECORDS_COLS_DEF}
                             visibleColumns={visibleColumns}
@@ -567,16 +749,38 @@ export default function MasterRecords() {
                                     )}
                                 </tr>
                             ))}
-                            {filteredRecords.length === 0 && (
+                            {fetchingRecords && (
+                                <tr>
+                                    <td colSpan={visibleColumns.length} className="px-6 py-12 text-center">
+                                        <div className="flex flex-col items-center justify-center gap-2">
+                                            <div className="w-8 h-8 border-3 border-indigo-600/30 border-t-indigo-600 rounded-full animate-spin" />
+                                            <span className="text-xs font-medium text-gray-500">Loading page records...</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            )}
+                            {!fetchingRecords && filteredRecords.length === 0 && (
                                 <tr>
                                     <td colSpan={visibleColumns.length} className="px-6 py-8 text-center text-gray-500">
-                                        {searchQuery ? 'No matching records found.' : 'No records found. Add one to get started!'}
+                                        {searchQuery ? 'No matching records found in this page.' : 'No records found. Add one to get started!'}
                                     </td>
                                 </tr>
                             )}
                         </tbody>
                     </table>
                 </div>
+
+                {/* Pagination Controls */}
+                <Pagination
+                    currentPage={currentPage}
+                    totalPages={Math.ceil(totalCount / pageSize) || 1}
+                    totalItems={totalCount}
+                    pageSize={pageSize}
+                    onPageChange={handlePageChange}
+                    onPageSizeChange={handlePageSizeChange}
+                    pageSizeOptions={[10, 25, 50, 100]}
+                    loading={fetchingRecords}
+                />
             </Card>
 
             {/* Add/Edit Modal */}
