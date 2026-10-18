@@ -1,62 +1,83 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../../firebase/firebase';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import Card from '../ui/Card';
 
 const ITEMS_PER_PAGE = 10;
 
-export default function DoctorVisitWidget() {
+export default function DoctorVisitWidget({ visitsData = null, loading: propLoading = false, embedded = false }) {
     const [doctorVisits, setDoctorVisits] = useState([]);
     const [displayCount, setDisplayCount] = useState(ITEMS_PER_PAGE);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(visitsData === null && propLoading);
     const printRef = useRef(null);
 
-    useEffect(() => {
-        // Subscribe to Visits with status "Visited"
-        const qVisits = query(collection(db, "visits"), where("status", "==", "Visited"));
-        const unsubscribe = onSnapshot(qVisits, (snapshot) => {
-            // Create a map to count visits per doctor
-            const doctorCountMap = {};
-            const doctorNameMap = {}; // Store doctor names and types
+    // Compute doctor visits list from a visits array
+    const processVisits = (visits) => {
+        const doctorCountMap = {};
+        const doctorNameMap = {};
 
-            snapshot.docs.forEach(doc => {
-                const data = doc.data();
-                const doctorId = data.docId || data.id; // Use docId if available
-                const doctorName = data.name || 'Unknown Doctor';
-                const doctorType = data.type || 'Doctor';
+        visits.forEach(item => {
+            const data = typeof item.data === 'function' ? item.data() : item;
+            const doctorId = data.docId || data.id;
+            const doctorName = data.name || 'Unknown Doctor';
+            const doctorType = data.type || 'Doctor';
 
-                if (doctorId) {
-                    doctorCountMap[doctorId] = (doctorCountMap[doctorId] || 0) + 1;
-                    doctorNameMap[doctorId] = {
-                        name: doctorName,
-                        type: doctorType
-                    };
-                } else if (doctorName && doctorName !== 'Unknown Doctor') {
-                    // Fallback: use doctor name as key if docId is not available
-                    doctorCountMap[doctorName] = (doctorCountMap[doctorName] || 0) + 1;
-                    doctorNameMap[doctorName] = {
-                        name: doctorName,
-                        type: doctorType
-                    };
-                }
-            });
-
-            // Convert to array, sort by count (descending), and set state
-            const sortedDoctors = Object.entries(doctorCountMap)
-                .map(([id, count]) => ({
-                    id,
-                    name: doctorNameMap[id]?.name || id,
-                    type: doctorNameMap[id]?.type || 'Doctor',
-                    visitCount: count
-                }))
-                .sort((a, b) => b.visitCount - a.visitCount);
-
-            setDoctorVisits(sortedDoctors);
-            setLoading(false);
+            if (doctorId) {
+                doctorCountMap[doctorId] = (doctorCountMap[doctorId] || 0) + 1;
+                doctorNameMap[doctorId] = {
+                    name: doctorName,
+                    type: doctorType
+                };
+            } else if (doctorName && doctorName !== 'Unknown Doctor') {
+                doctorCountMap[doctorName] = (doctorCountMap[doctorName] || 0) + 1;
+                doctorNameMap[doctorName] = {
+                    name: doctorName,
+                    type: doctorType
+                };
+            }
         });
 
-        return () => unsubscribe();
-    }, []);
+        return Object.entries(doctorCountMap)
+            .map(([id, count]) => ({
+                id,
+                name: doctorNameMap[id]?.name || id,
+                type: doctorNameMap[id]?.type || 'Doctor',
+                visitCount: count
+            }))
+            .sort((a, b) => b.visitCount - a.visitCount);
+    };
+
+    useEffect(() => {
+        // If parent passed already-fetched visitsData, compute directly with ZERO reads!
+        if (visitsData !== null) {
+            setDoctorVisits(processVisits(visitsData));
+            setLoading(false);
+            return;
+        }
+
+        // If no visitsData passed, fetch once on demand with getDocs (not a permanent onSnapshot!)
+        let isMounted = true;
+        const fetchVisitsOnce = async () => {
+            setLoading(true);
+            try {
+                const qVisits = query(collection(db, "visits"), where("status", "==", "Visited"));
+                const snapshot = await getDocs(qVisits);
+                if (isMounted) {
+                    setDoctorVisits(processVisits(snapshot.docs));
+                    setLoading(false);
+                }
+            } catch (err) {
+                console.error("Error fetching doctor visits:", err);
+                if (isMounted) setLoading(false);
+            }
+        };
+
+        fetchVisitsOnce();
+
+        return () => {
+            isMounted = false;
+        };
+    }, [visitsData]);
 
     const displayedDoctors = doctorVisits.slice(0, displayCount);
     const hasMore = displayCount < doctorVisits.length;

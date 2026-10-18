@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../firebase/firebase';
-import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, deleteDoc, getDoc, getDocs, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, query, where, doc, updateDoc, addDoc, deleteDoc, getDoc, getDocs, getCountFromServer, serverTimestamp } from 'firebase/firestore';
 import DashboardLayout from '../components/layout/DashboardLayout';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
 import ColumnToggle from '../components/ui/ColumnToggle';
+import CollapsibleGadget from '../components/ui/CollapsibleGadget';
 import DoctorVisitWidget from '../components/widgets/DoctorVisitWidget';
 import { ODISHA_DISTRICTS } from '../constants/districts';
 import { SPECIALISTS } from '../constants/specialists';
@@ -37,12 +38,33 @@ export default function AdminDashboard() {
     });
     const [employees, setEmployees] = useState([]);
     const [pendingApprovals, setPendingApprovals] = useState([]);
-    const [userVisitCounts, setUserVisitCounts] = useState([]);
+    const [rawVisits, setRawVisits] = useState([]);
+    const [userVisitCounts, setUserVisitCounts] = useState({});
     const [doctorVisitCounts, setDoctorVisitCounts] = useState([]);
     const [doctorLimit, setDoctorLimit] = useState(10);
     const [visitDates, setVisitDates] = useState([]);
     const [trendPeriod, setTrendPeriod] = useState('day'); // day, week, month, year
-    const [loading, setLoading] = useState(true);
+
+    // Collapsible gadget open/close states (default false = nothing fetched on load)
+    const [openStats, setOpenStats] = useState(false);
+    const [openTrends, setOpenTrends] = useState(false);
+    const [openDoctorVisits, setOpenDoctorVisits] = useState(false);
+    const [openUserVisits, setOpenUserVisits] = useState(false);
+    const [openApprovals, setOpenApprovals] = useState(false);
+    const [openEmployees, setOpenEmployees] = useState(false);
+    const [openTools, setOpenTools] = useState(false);
+
+    // Cache tracking flags (true once fetched; does not re-fetch on collapse/expand)
+    const [statsLoaded, setStatsLoaded] = useState(false);
+    const [visitsLoaded, setVisitsLoaded] = useState(false);
+    const [employeesLoaded, setEmployeesLoaded] = useState(false);
+    const [approvalsLoaded, setApprovalsLoaded] = useState(false);
+
+    // Per-gadget loading states
+    const [loadingStats, setLoadingStats] = useState(false);
+    const [loadingVisits, setLoadingVisits] = useState(false);
+    const [loadingEmployees, setLoadingEmployees] = useState(false);
+    const [loadingApprovals, setLoadingApprovals] = useState(false);
 
     // Column Preferences State
     const [approvalsColumns, setApprovalsColumns] = useState(() => {
@@ -98,52 +120,51 @@ export default function AdminDashboard() {
         localStorage.setItem('admin_employees_columns', JSON.stringify(employeesColumns));
     }, [employeesColumns]);
 
-    useEffect(() => {
-        // Subscribe to Master Records to count Doctors and Chemists
-        const unsubscribeRecords = onSnapshot(collection(db, "master_records"), (snapshot) => {
-            let doctorCount = 0;
-            let chemistCount = 0;
+    // On-demand fetch for Stats using server count aggregation (~4 reads total)
+    const fetchStats = async (force = false) => {
+        if (statsLoaded && !force) return;
+        setLoadingStats(true);
+        try {
+            const qDoctors = query(collection(db, "master_records"), where("type", "==", "Doctor"));
+            const qChemists = query(collection(db, "master_records"), where("type", "==", "Chemist"));
+            const qVisits = query(collection(db, "visits"), where("status", "==", "Visited"));
+            const qUsers = query(collection(db, "users"), where("role", "==", "user"));
 
-            snapshot.forEach((doc) => {
-                const data = doc.data();
-                if (data.type === 'Doctor') doctorCount++;
-                if (data.type === 'Chemist') chemistCount++;
+            const [docSnap, chemSnap, visitSnap, userSnap] = await Promise.all([
+                getCountFromServer(qDoctors),
+                getCountFromServer(qChemists),
+                getCountFromServer(qVisits),
+                getCountFromServer(qUsers)
+            ]);
+
+            setStats({
+                doctors: docSnap.data().count,
+                chemists: chemSnap.data().count,
+                totalVisits: visitSnap.data().count,
+                employees: userSnap.data().count
             });
+            setStatsLoaded(true);
+        } catch (error) {
+            console.error("Error fetching stats counts:", error);
+        } finally {
+            setLoadingStats(false);
+        }
+    };
 
-            setStats(prev => ({
-                ...prev,
-                doctors: doctorCount,
-                chemists: chemistCount
-            }));
-        });
+    // On-demand fetch for Visits (shared by Trends, Doctor Visits, and User Visits)
+    const fetchVisits = async (force = false) => {
+        if (visitsLoaded && !force) return;
+        setLoadingVisits(true);
+        try {
+            const qVisits = query(collection(db, "visits"), where("status", "==", "Visited"));
+            const snapshot = await getDocs(qVisits);
+            const docsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        // Subscribe to Users to count Employees (role == 'user') and get list
-        const qUsers = query(collection(db, "users"), where("role", "==", "user"));
-        const unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
-            const employeeList = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
-
-            setEmployees(employeeList);
-            setStats(prev => ({
-                ...prev,
-                employees: snapshot.size
-            }));
-            setLoading(false);
-        });
-
-        // Subscribe to Visits to count completed visits
-        const qVisits = query(collection(db, "visits"), where("status", "==", "Visited"));
-        const unsubscribeVisits = onSnapshot(qVisits, (snapshot) => {
-
-            // Calculate visits per user and store raw dates
             const counts = {};
             const doctorCountsMap = {};
             const dates = [];
 
-            snapshot.docs.forEach(doc => {
-                const data = doc.data();
+            docsData.forEach(data => {
                 // Count per user
                 if (data.createdBy) {
                     counts[data.createdBy] = (counts[data.createdBy] || 0) + 1;
@@ -157,7 +178,7 @@ export default function AdminDashboard() {
                 // Store date
                 const timestamp = data.visitedAt || data.updatedAt || data.createdAt;
                 if (timestamp) {
-                    dates.push(timestamp.toDate());
+                    dates.push(typeof timestamp.toDate === 'function' ? timestamp.toDate() : new Date(timestamp));
                 }
             });
 
@@ -165,32 +186,105 @@ export default function AdminDashboard() {
                 .map(([name, count]) => ({ name, count }))
                 .sort((a, b) => b.count - a.count);
 
-            setStats(prev => ({
-                ...prev,
-                totalVisits: snapshot.size
-            }));
+            setRawVisits(docsData);
             setUserVisitCounts(counts);
             setDoctorVisitCounts(doctorCountsArray);
             setVisitDates(dates);
-        });
+            setVisitsLoaded(true);
+        } catch (error) {
+            console.error("Error fetching visits:", error);
+        } finally {
+            setLoadingVisits(false);
+        }
+    };
 
-        // Subscribe to Pending Approvals
-        const qApprovals = query(collection(db, "pending_approvals"), where("status", "==", "PENDING"));
-        const unsubscribeApprovals = onSnapshot(qApprovals, (snapshot) => {
+    // On-demand fetch for Employees
+    const fetchEmployees = async (force = false) => {
+        if (employeesLoaded && !force) return;
+        setLoadingEmployees(true);
+        try {
+            const qUsers = query(collection(db, "users"), where("role", "==", "user"));
+            const snapshot = await getDocs(qUsers);
+            const employeeList = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+
+            setEmployees(employeeList);
+            setEmployeesLoaded(true);
+        } catch (error) {
+            console.error("Error fetching employees:", error);
+        } finally {
+            setLoadingEmployees(false);
+        }
+    };
+
+    // On-demand fetch for Pending Approvals
+    const fetchApprovals = async (force = false) => {
+        if (approvalsLoaded && !force) return;
+        setLoadingApprovals(true);
+        try {
+            const qApprovals = query(collection(db, "pending_approvals"), where("status", "==", "PENDING"));
+            const snapshot = await getDocs(qApprovals);
             const approvals = snapshot.docs.map(doc => ({
                 id: doc.id,
                 ...doc.data()
             }));
             setPendingApprovals(approvals);
-        });
+            setApprovalsLoaded(true);
+        } catch (error) {
+            console.error("Error fetching pending approvals:", error);
+        } finally {
+            setLoadingApprovals(false);
+        }
+    };
 
-        return () => {
-            unsubscribeRecords();
-            unsubscribeUsers();
-            unsubscribeApprovals();
-            unsubscribeVisits();
-        };
-    }, []);
+    // Toggle handlers that fetch only on first expand
+    const handleToggleStats = () => {
+        const next = !openStats;
+        setOpenStats(next);
+        if (next && !statsLoaded) fetchStats();
+    };
+
+    const handleToggleTrends = () => {
+        const next = !openTrends;
+        setOpenTrends(next);
+        if (next && !visitsLoaded) fetchVisits();
+    };
+
+    const handleToggleDoctorVisits = () => {
+        const next = !openDoctorVisits;
+        setOpenDoctorVisits(next);
+        if (next && !visitsLoaded) fetchVisits();
+    };
+
+    const handleToggleUserVisits = () => {
+        const next = !openUserVisits;
+        setOpenUserVisits(next);
+        if (next) {
+            if (!visitsLoaded) fetchVisits();
+            if (!employeesLoaded) fetchEmployees();
+        }
+    };
+
+    const handleToggleApprovals = () => {
+        const next = !openApprovals;
+        setOpenApprovals(next);
+        if (next) {
+            if (!approvalsLoaded) fetchApprovals();
+            if (!employeesLoaded) fetchEmployees();
+        }
+    };
+
+    const handleToggleEmployees = () => {
+        const next = !openEmployees;
+        setOpenEmployees(next);
+        if (next && !employeesLoaded) fetchEmployees();
+    };
+
+    const handleToggleTools = () => {
+        setOpenTools(prev => !prev);
+    };
 
     // Fetch cities when viewing district changes
     useEffect(() => {
@@ -280,6 +374,13 @@ export default function AdminDashboard() {
                 assignedCities: tempAssignedCities,
                 assignedSpecialities: tempAssignedSpecialities
             });
+            // Update local state immediately so table reflects change with 0 reads
+            setEmployees(prev => prev.map(emp => emp.id === selectedEmployee.id ? {
+                ...emp,
+                assignedDistricts: tempAssignedDistricts,
+                assignedCities: tempAssignedCities,
+                assignedSpecialities: tempAssignedSpecialities
+            } : emp));
             handleCloseModal();
         } catch (error) {
             console.error("Error updating assignment:", error);
@@ -328,6 +429,18 @@ export default function AdminDashboard() {
                 status: 'APPROVED',
                 processedAt: serverTimestamp()
             });
+
+            // Update local state immediately with 0 reads
+            setPendingApprovals(prev => prev.filter(p => p.id !== request.id));
+            if (statsLoaded) {
+                if (request.type === 'ADD') {
+                    if (request.data?.type === 'Doctor') setStats(s => ({ ...s, doctors: s.doctors + 1 }));
+                    if (request.data?.type === 'Chemist') setStats(s => ({ ...s, chemists: s.chemists + 1 }));
+                } else if (request.type === 'DELETE') {
+                    if (request.data?.type === 'Doctor') setStats(s => ({ ...s, doctors: Math.max(0, s.doctors - 1) }));
+                    if (request.data?.type === 'Chemist') setStats(s => ({ ...s, chemists: Math.max(0, s.chemists - 1) }));
+                }
+            }
             handleCloseApprovalModal();
         } catch (error) {
             console.error("Error approving request:", error);
@@ -342,6 +455,8 @@ export default function AdminDashboard() {
                 status: 'REJECTED',
                 processedAt: serverTimestamp()
             });
+            // Update local state immediately with 0 reads
+            setPendingApprovals(prev => prev.filter(p => p.id !== request.id));
             handleCloseApprovalModal();
         } catch (error) {
             console.error("Error rejecting request:", error);
@@ -727,81 +842,97 @@ export default function AdminDashboard() {
             title="Admin Dashboard"
             backgroundClass="bg-gradient-to-br from-blue-100 via-indigo-100 to-purple-100"
         >
-            {/* Analytics Cards */}
-            <div className="grid gap-4 md:grid-cols-4 mb-6">
-                <Card className="p-4 border-l-4 border-indigo-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Doctors</h3>
-                            <p className="text-2xl font-bold text-gray-900 mt-1">
-                                {loading ? '...' : stats.doctors}
-                            </p>
+            {/* 1. Analytics Summary Gadget */}
+            <CollapsibleGadget
+                title="Key Statistics & Performance Metrics"
+                subtitle="Total registered Doctors, Chemists, Employees, and completed Visits"
+                icon="📈"
+                badge={
+                    statsLoaded
+                        ? { text: 'Counts Cached', colorClass: 'bg-emerald-50 text-emerald-700 border-emerald-200' }
+                        : { text: 'Not Loaded', colorClass: 'bg-gray-100 text-gray-600 border-gray-200' }
+                }
+                isOpen={openStats}
+                onToggle={handleToggleStats}
+                isLoading={loadingStats}
+                onRefresh={() => fetchStats(true)}
+                borderAccent="border-indigo-500"
+                lazyPrompt="Click to load real-time database counts via server aggregation"
+            >
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <Card className="p-4 border-l-4 border-indigo-500 bg-white/60 backdrop-blur-lg shadow-sm border-white/50">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Doctors</h3>
+                                <p className="text-2xl font-bold text-gray-900 mt-1">
+                                    {loadingStats ? '...' : stats.doctors}
+                                </p>
+                            </div>
+                            <div className="p-2 bg-indigo-50 rounded-full">
+                                <span className="text-xl">👨‍⚕️</span>
+                            </div>
                         </div>
-                        <div className="p-2 bg-indigo-50 rounded-full">
-                            <span className="text-xl">👨‍⚕️</span>
-                        </div>
-                    </div>
-                </Card>
+                    </Card>
 
-                <Card className="p-4 border-l-4 border-green-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Chemists</h3>
-                            <p className="text-2xl font-bold text-gray-900 mt-1">
-                                {loading ? '...' : stats.chemists}
-                            </p>
+                    <Card className="p-4 border-l-4 border-green-500 bg-white/60 backdrop-blur-lg shadow-sm border-white/50">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Chemists</h3>
+                                <p className="text-2xl font-bold text-gray-900 mt-1">
+                                    {loadingStats ? '...' : stats.chemists}
+                                </p>
+                            </div>
+                            <div className="p-2 bg-green-50 rounded-full">
+                                <span className="text-xl">💊</span>
+                            </div>
                         </div>
-                        <div className="p-2 bg-green-50 rounded-full">
-                            <span className="text-xl">💊</span>
-                        </div>
-                    </div>
-                </Card>
+                    </Card>
 
-                <Card className="p-4 border-l-4 border-orange-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Employees</h3>
-                            <p className="text-2xl font-bold text-gray-900 mt-1">
-                                {loading ? '...' : stats.employees}
-                            </p>
+                    <Card className="p-4 border-l-4 border-orange-500 bg-white/60 backdrop-blur-lg shadow-sm border-white/50">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Employees</h3>
+                                <p className="text-2xl font-bold text-gray-900 mt-1">
+                                    {loadingStats ? '...' : stats.employees}
+                                </p>
+                            </div>
+                            <div className="p-2 bg-orange-50 rounded-full">
+                                <span className="text-xl">👥</span>
+                            </div>
                         </div>
-                        <div className="p-2 bg-orange-50 rounded-full">
-                            <span className="text-xl">👥</span>
-                        </div>
-                    </div>
-                </Card>
+                    </Card>
 
-                <Card className="p-4 border-l-4 border-blue-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Visits</h3>
-                            <p className="text-2xl font-bold text-gray-900 mt-1">
-                                {loading ? '...' : stats.totalVisits}
-                            </p>
+                    <Card className="p-4 border-l-4 border-blue-500 bg-white/60 backdrop-blur-lg shadow-sm border-white/50">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h3 className="text-gray-500 text-xs font-medium uppercase tracking-wider">Total Visits</h3>
+                                <p className="text-2xl font-bold text-gray-900 mt-1">
+                                    {loadingStats ? '...' : stats.totalVisits}
+                                </p>
+                            </div>
+                            <div className="p-2 bg-blue-50 rounded-full">
+                                <span className="text-xl">✅</span>
+                            </div>
                         </div>
-                        <div className="p-2 bg-blue-50 rounded-full">
-                            <span className="text-xl">✅</span>
-                        </div>
-                    </div>
-                </Card>
-            </div>
-
-            {/* Import/Export Data Section */}
-            <Card className="p-6 mb-8 bg-white/60 backdrop-blur-lg shadow-lg border-white/50 border-l-4 border-green-500">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
-                    <div>
-                        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                            <span className="text-2xl">📊</span>
-                            Import / Export Data
-                        </h3>
-                        <p className="text-sm text-gray-500 mt-1">Upload or download records in Excel format</p>
-                    </div>
+                    </Card>
                 </div>
+            </CollapsibleGadget>
+
+            {/* 2. Import/Export Data Section */}
+            <CollapsibleGadget
+                title="Import / Export Data"
+                subtitle="Upload or download records in Excel format"
+                icon="📊"
+                isOpen={openTools}
+                onToggle={handleToggleTools}
+                borderAccent="border-green-500"
+                lazyPrompt="Click to expand Excel import & export tools"
+            >
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     {/* Import Button */}
                     <button
                         onClick={() => setIsImportModalOpen(true)}
-                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium cursor-pointer"
                     >
                         <span className="text-xl">📤</span>
                         <span>Import Master Records</span>
@@ -810,99 +941,158 @@ export default function AdminDashboard() {
                     {/* Export Buttons */}
                     <button
                         onClick={() => exportToExcel('master_records')}
-                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium cursor-pointer"
                     >
                         <span className="text-xl">📋</span>
                         <span>Export Master Records</span>
                     </button>
                     <button
                         onClick={() => exportToExcel('visits')}
-                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg hover:from-purple-600 hover:to-purple-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-lg hover:from-purple-600 hover:to-purple-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium cursor-pointer"
                     >
                         <span className="text-xl">📝</span>
                         <span>Export DCR / Visits</span>
                     </button>
                     <button
                         onClick={() => exportToExcel('employees')}
-                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg hover:from-indigo-600 hover:to-indigo-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium"
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-lg hover:from-indigo-600 hover:to-indigo-700 shadow-md hover:shadow-lg transition-all duration-200 font-medium cursor-pointer"
                     >
                         <span className="text-xl">👥</span>
                         <span>Export Employees</span>
                     </button>
                 </div>
-            </Card>
+            </CollapsibleGadget>
 
-            {/* Visit Trends Chart */}
-            <Card className="p-6 mb-8 bg-white/60 backdrop-blur-lg shadow-lg border-white/50 border-l-4 border-indigo-500">
-                <div className="flex flex-col sm:flex-row justify-between items-center mb-6">
-                    <div>
-                        <h3 className="text-lg font-semibold text-gray-900">Visit Trends</h3>
-                        <p className="text-sm text-gray-500">Visualizing completed visits over time.</p>
-                    </div>
-                    <div className="flex space-x-2 mt-4 sm:mt-0">
-                        {['day', 'week', 'month', 'year'].map((period) => (
-                            <button
-                                key={period}
-                                onClick={() => setTrendPeriod(period)}
-                                className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${trendPeriod === period
-                                    ? 'bg-indigo-600 text-white shadow-md'
-                                    : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+            {/* 3. Visit Trends Chart */}
+            <CollapsibleGadget
+                title="Visit Trends"
+                subtitle="Visualizing completed visits over time"
+                icon="📉"
+                badge={
+                    visitsLoaded
+                        ? { text: `${visitDates.length} visits cached`, colorClass: 'bg-indigo-50 text-indigo-700 border-indigo-200' }
+                        : { text: 'Not Loaded', colorClass: 'bg-gray-100 text-gray-600 border-gray-200' }
+                }
+                isOpen={openTrends}
+                onToggle={handleToggleTrends}
+                isLoading={loadingVisits}
+                onRefresh={() => fetchVisits(true)}
+                borderAccent="border-indigo-500"
+                lazyPrompt="Click to load visits data and visualize trend graph"
+                headerActions={
+                    openTrends && (
+                        <div className="flex space-x-1 sm:space-x-2">
+                            {['day', 'week', 'month', 'year'].map((period) => (
+                                <button
+                                    key={period}
+                                    type="button"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setTrendPeriod(period);
+                                    }}
+                                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                                        trendPeriod === period
+                                            ? 'bg-indigo-600 text-white shadow-xs'
+                                            : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
                                     }`}
-                            >
-                                {period.charAt(0).toUpperCase() + period.slice(1)}
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
+                                >
+                                    {period.charAt(0).toUpperCase() + period.slice(1)}
+                                </button>
+                            ))}
+                        </div>
+                    )
+                }
+            >
                 <div className="h-[300px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <AreaChart data={getTrendData(visitDates, trendPeriod)}>
-                            <defs>
-                                <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                                </linearGradient>
-                            </defs>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                            <XAxis
-                                dataKey="name"
-                                axisLine={false}
-                                tickLine={false}
-                                tick={{ fill: '#6b7280', fontSize: 12 }}
-                                dy={10}
-                            />
-                            <YAxis
-                                axisLine={false}
-                                tickLine={false}
-                                tick={{ fill: '#6b7280', fontSize: 12 }}
-                            />
-                            <Tooltip
-                                contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', border: 'none' }}
-                                itemStyle={{ color: '#4f46e5' }}
-                            />
-                            <Area
-                                type="monotone"
-                                dataKey="visits"
-                                stroke="#6366f1"
-                                strokeWidth={3}
-                                fillOpacity={1}
-                                fill="url(#colorVisits)"
-                            />
-                        </AreaChart>
-                    </ResponsiveContainer>
+                    {visitDates.length === 0 ? (
+                        <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                            No completed visits found.
+                        </div>
+                    ) : (
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={getTrendData(visitDates, trendPeriod)}>
+                                <defs>
+                                    <linearGradient id="colorVisits" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+                                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                                <XAxis
+                                    dataKey="name"
+                                    axisLine={false}
+                                    tickLine={false}
+                                    tick={{ fill: '#6b7280', fontSize: 12 }}
+                                    dy={10}
+                                />
+                                <YAxis
+                                    axisLine={false}
+                                    tickLine={false}
+                                    tick={{ fill: '#6b7280', fontSize: 12 }}
+                                />
+                                <Tooltip
+                                    contentStyle={{ backgroundColor: '#fff', borderRadius: '8px', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', border: 'none' }}
+                                    itemStyle={{ color: '#4f46e5' }}
+                                />
+                                <Area
+                                    type="monotone"
+                                    dataKey="visits"
+                                    stroke="#6366f1"
+                                    strokeWidth={3}
+                                    fillOpacity={1}
+                                    fill="url(#colorVisits)"
+                                />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    )}
                 </div>
-            </Card>
+            </CollapsibleGadget>
 
-            {/* Doctor Visit Widget */}
-            <DoctorVisitWidget />
+            {/* 4. Doctor Visit Widget */}
+            <CollapsibleGadget
+                title="Doctor Visits Summary & PDF Report"
+                subtitle="Top visited doctors and chemists, visit counts, and printable PDF report"
+                icon="👨‍⚕️"
+                badge={
+                    visitsLoaded
+                        ? { text: 'Visits Cached', colorClass: 'bg-rose-50 text-rose-700 border-rose-200' }
+                        : { text: 'Not Loaded', colorClass: 'bg-gray-100 text-gray-600 border-gray-200' }
+                }
+                isOpen={openDoctorVisits}
+                onToggle={handleToggleDoctorVisits}
+                isLoading={loadingVisits}
+                onRefresh={() => fetchVisits(true)}
+                borderAccent="border-rose-500"
+                lazyPrompt="Click to load doctor visit frequencies and reports"
+            >
+                <DoctorVisitWidget visitsData={rawVisits} loading={loadingVisits} embedded={true} />
+            </CollapsibleGadget>
 
-            {/* Visits by User Widget */}
-            {userVisitCounts && Object.keys(userVisitCounts).length > 0 && (
-                <Card className="p-0 overflow-hidden flex flex-col mb-8 border-l-4 border-blue-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                    <div className="p-6 border-b border-gray-100/50 flex justify-between items-center">
-                        <h3 className="text-lg font-semibold text-gray-900">Visits by User</h3>
+            {/* 5. Visits by User Widget */}
+            <CollapsibleGadget
+                title="Visits by User"
+                subtitle="Completed visits breakdown per employee"
+                icon="👤"
+                badge={
+                    visitsLoaded && employeesLoaded
+                        ? { text: 'Cached', colorClass: 'bg-blue-50 text-blue-700 border-blue-200' }
+                        : { text: 'Not Loaded', colorClass: 'bg-gray-100 text-gray-600 border-gray-200' }
+                }
+                isOpen={openUserVisits}
+                onToggle={handleToggleUserVisits}
+                isLoading={loadingVisits || loadingEmployees}
+                onRefresh={() => {
+                    fetchVisits(true);
+                    fetchEmployees(true);
+                }}
+                borderAccent="border-blue-500"
+                lazyPrompt="Click to load completed visits grouped by field employee"
+            >
+                {Object.keys(userVisitCounts).length === 0 ? (
+                    <div className="py-8 text-center text-gray-500 text-sm">
+                        No completed user visits recorded yet.
                     </div>
+                ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-left text-sm">
                             <thead className="bg-gray-50/50 text-gray-500 uppercase">
@@ -934,75 +1124,45 @@ export default function AdminDashboard() {
                             </tbody>
                         </table>
                     </div>
-                </Card>
-            )}
+                )}
+            </CollapsibleGadget>
 
-            {/* Doctor Visits Widget */}
-            {doctorVisitCounts && doctorVisitCounts.length > 0 && (
-                <Card className="p-0 overflow-hidden flex flex-col mb-8 border-l-4 border-purple-500 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                    <div className="p-6 border-b border-gray-100/50 flex justify-between items-center text-wrap-none">
-                        <div>
-                            <h3 className="text-lg font-semibold text-gray-900">Doctor Visit Distribution</h3>
-                            <p className="text-sm text-gray-500">Number of visits per doctor, sorted by frequency.</p>
-                        </div>
-                        <button
-                            onClick={handlePrintDoctorVisits}
-                            className="flex items-center gap-2 px-3 py-1.5 bg-white border border-purple-200 text-purple-700 rounded-lg hover:bg-purple-50 transition-colors text-sm font-medium shadow-sm"
-                        >
-                            <span>🖨️</span>
-                            <span className="hidden sm:inline">Print Report</span>
-                        </button>
-                    </div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-left text-sm">
-                            <thead className="bg-gray-50/50 text-gray-500 uppercase">
-                                <tr>
-                                    <th className="px-6 py-3 font-medium">Doctor Name</th>
-                                    <th className="px-6 py-3 font-medium text-right">Visit Count</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                                {doctorVisitCounts.slice(0, doctorLimit).map((doctor, index) => (
-                                    <tr key={index} className="hover:bg-white/40 transition-colors">
-                                        <td className="px-6 py-4 font-medium text-gray-900">{doctor.name}</td>
-                                        <td className="px-6 py-4 text-right">
-                                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
-                                                {doctor.count}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                    {doctorLimit < doctorVisitCounts.length && (
-                        <div className="p-4 bg-gray-50/30 text-center border-t border-gray-100/50">
-                            <button
-                                onClick={() => setDoctorLimit(prev => prev + 10)}
-                                className="text-indigo-600 hover:text-indigo-800 font-medium text-sm transition-colors flex items-center justify-center gap-1 mx-auto"
-                            >
-                                <span>Show More Doctors</span>
-                                <span className="text-lg">↓</span>
-                            </button>
-                        </div>
-                    )}
-                </Card>
-            )}
-
-            {/* Pending Approvals Section */}
-            {pendingApprovals.length > 0 && (
-                <Card className="p-0 overflow-hidden flex flex-col mb-8 border-l-4 border-yellow-400 bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                    <div className="p-6 border-b border-gray-100/50 bg-yellow-50/50 flex justify-between items-start">
-                        <div>
-                            <h3 className="text-lg font-semibold text-yellow-800">⚠️ Pending Approvals ({pendingApprovals.length})</h3>
-                            <p className="text-sm text-yellow-700">Review and approve changes made by employees.</p>
-                        </div>
+            {/* 6. Pending Approvals Section */}
+            <CollapsibleGadget
+                title="Pending Approvals"
+                subtitle="Review and approve changes submitted by field employees"
+                icon="⚠️"
+                badge={
+                    approvalsLoaded
+                        ? {
+                            text: `${pendingApprovals.length} pending`,
+                            colorClass: pendingApprovals.length > 0
+                                ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                : 'bg-green-50 text-green-700 border-green-200'
+                        }
+                        : { text: 'Not Loaded', colorClass: 'bg-gray-100 text-gray-600 border-gray-200' }
+                }
+                isOpen={openApprovals}
+                onToggle={handleToggleApprovals}
+                isLoading={loadingApprovals}
+                onRefresh={() => fetchApprovals(true)}
+                borderAccent="border-yellow-400"
+                lazyPrompt="Click to review pending master record approval requests"
+                headerActions={
+                    openApprovals && (
                         <ColumnToggle
                             columns={APPROVALS_COLS_DEF}
                             visibleColumns={approvalsColumns}
                             onChange={setApprovalsColumns}
                         />
+                    )
+                }
+            >
+                {pendingApprovals.length === 0 ? (
+                    <div className="py-8 text-center text-gray-500 text-sm">
+                        🎉 No pending approvals at this time. All record submissions are up to date!
                     </div>
+                ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-left text-sm">
                             <thead className="bg-white/50 text-gray-500 uppercase border-b border-gray-100/50">
@@ -1016,7 +1176,6 @@ export default function AdminDashboard() {
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                                 {pendingApprovals.map((request) => {
-                                    // Try to find the user in the employees list to get the most up-to-date info
                                     const requester = employees.find(e => e.id === request.requestedBy);
                                     const displayName = requester?.name || request.requestedByName || 'Unknown';
                                     const displayEmail = requester?.email || request.requestedByEmail || '-';
@@ -1049,8 +1208,8 @@ export default function AdminDashboard() {
                                                         <span>Delete Record ID: {request.recordId}</span>
                                                     ) : (
                                                         <div className="flex flex-col">
-                                                            <span className="font-medium">{request.data.name}</span>
-                                                            <span className="text-xs">{request.data.district}</span>
+                                                            <span className="font-medium">{request.data?.name}</span>
+                                                            <span className="text-xs">{request.data?.district}</span>
                                                         </div>
                                                     )}
                                                 </td>
@@ -1068,23 +1227,35 @@ export default function AdminDashboard() {
                             </tbody>
                         </table>
                     </div>
-                </Card>
-            )}
+                )}
+            </CollapsibleGadget>
 
-            {/* Employee Engagement Table */}
-            <Card className="p-0 overflow-hidden flex flex-col min-h-[400px] bg-white/60 backdrop-blur-lg shadow-lg border-white/50">
-                <div className="p-6 border-b border-gray-100/50 flex justify-between items-center">
-                    <div>
-                        <h3 className="text-lg font-semibold text-gray-900">Employee Engagement</h3>
-                        <p className="text-sm text-gray-500">Manage district assignments for employees.</p>
-                    </div>
-                    <ColumnToggle
-                        columns={EMPLOYEES_COLS_DEF}
-                        visibleColumns={employeesColumns}
-                        onChange={setEmployeesColumns}
-                    />
-                </div>
-
+            {/* 7. Employee Engagement Table */}
+            <CollapsibleGadget
+                title="Employee Engagement"
+                subtitle="Manage district, city, and speciality assignments for field employees"
+                icon="👥"
+                badge={
+                    employeesLoaded
+                        ? { text: `${employees.length} employees cached`, colorClass: 'bg-indigo-50 text-indigo-700 border-indigo-200' }
+                        : { text: 'Not Loaded', colorClass: 'bg-gray-100 text-gray-600 border-gray-200' }
+                }
+                isOpen={openEmployees}
+                onToggle={handleToggleEmployees}
+                isLoading={loadingEmployees}
+                onRefresh={() => fetchEmployees(true)}
+                borderAccent="border-indigo-500"
+                lazyPrompt="Click to load employee territory and city assignments"
+                headerActions={
+                    openEmployees && (
+                        <ColumnToggle
+                            columns={EMPLOYEES_COLS_DEF}
+                            visibleColumns={employeesColumns}
+                            onChange={setEmployeesColumns}
+                        />
+                    )
+                }
+            >
                 <div className="overflow-x-auto flex-1">
                     <table className="w-full text-left text-sm">
                         <thead className="bg-gray-50/50 text-gray-500 uppercase">
@@ -1148,7 +1319,7 @@ export default function AdminDashboard() {
                                     )}
                                 </tr>
                             ))}
-                            {employees.length === 0 && !loading && (
+                            {employees.length === 0 && !loadingEmployees && (
                                 <tr>
                                     <td colSpan="4" className="px-6 py-8 text-center text-gray-500">
                                         No employees found.
@@ -1158,7 +1329,7 @@ export default function AdminDashboard() {
                         </tbody>
                     </table>
                 </div>
-            </Card>
+            </CollapsibleGadget>
 
             {/* Assignment Modal */}
             <Modal
