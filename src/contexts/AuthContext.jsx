@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { auth, db } from '../firebase/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 
 const AuthContext = createContext();
@@ -43,6 +43,18 @@ export function AuthProvider({ children }) {
 
                     if (docSnapshot.exists()) {
                         const data = docSnapshot.data();
+
+                        // Check if user has been deactivated by Super Admin
+                        if (data.isActive === false) {
+                            console.warn(`[AuthContext] User ${user.uid} is deactivated. Signing out immediately.`);
+                            signOut(auth);
+                            setCurrentUser(null);
+                            setUserRole(null);
+                            setUserData(null);
+                            setLoading(false);
+                            return;
+                        }
+
                         const role = data.role;
                         console.log(`[AuthContext] User ${user.uid} updated. Role: ${role}`);
                         // console.log("[AuthContext] Full user data:", data);

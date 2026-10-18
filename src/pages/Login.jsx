@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../firebase/firebase';
+import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { auth, db } from '../firebase/firebase';
+import { doc, getDoc } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -26,10 +27,27 @@ export default function Login() {
         setError('');
         setLoading(true);
         try {
-            await signInWithEmailAndPassword(auth, email, password);
+            const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+            
+            // Check if user has been deactivated by Super Admin
+            const userDocSnap = await getDoc(doc(db, "users", userCredential.user.uid));
+            if (userDocSnap.exists() && userDocSnap.data().isActive === false) {
+                await signOut(auth);
+                setError('Your account has been deactivated. Please contact Super Admin.');
+                setLoading(false);
+                return;
+            }
+
             // Navigation is handled by useEffect
         } catch (err) {
-            setError('Invalid email or password. Please try again.');
+            console.error("Firebase Login Error:", err.code, err.message);
+            if (err.code === 'auth/user-disabled') {
+                setError('Your account has been disabled. Please contact Super Admin.');
+            } else if (err.code === 'auth/too-many-requests') {
+                setError('Too many failed attempts. Access is temporarily locked. Please wait a few moments.');
+            } else {
+                setError('Invalid email or password. Please try again.');
+            }
             setLoading(false);
         }
     };
