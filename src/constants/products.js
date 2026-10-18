@@ -1,4 +1,5 @@
 export const PRODUCTS = [
+    { name: 'INTECIUM-D3 DROP', hsn: '21061000', pack: '1x1' },
     { name: 'Intecium-MG TABLET', hsn: '21061000', pack: '1x10' },
     { name: 'Intecium-XT TABLET', hsn: '21061000', pack: '1x10' },
     { name: 'Intefert-d', hsn: '21069099', pack: '1x10' },
